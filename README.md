@@ -26,8 +26,8 @@ If your observations are real-valued and generally assumed to follow a normal di
 ```
 from functionalmf.factor import GaussianBayesianTensorFiltering
 
-def init_model(tf_order=2, lam2=0.1, sigma2=0.5, nu2=1):
-    # Setup the lower bound inequalities
+def init_model(nembeds=3, tf_order=2, lam2=0.1, sigma2=0.5, nu2=1):
+    # Setup the model
     return GaussianBayesianTensorFiltering(nrows, ncols, ndepth,
                                                           nembeds=nembeds, tf_order=tf_order,
                                                           sigma2_init=sigma2, nthreads=1,
@@ -59,8 +59,8 @@ See `examples/gaussian_tensor_filtering.py` for a full example .Results should l
 If your observations are binomial (or binary or negative binomial), you can use the Binomial sampler:
 ```
 from functionalmf.factor import BinomialBayesianTensorFiltering
-def init_model(tf_order=2, lam2=0.1, sigma2=0.5):
-    # Setup the lower bound inequalities
+def init_model(nembeds=3, tf_order=2, lam2=0.1, sigma2=0.5):
+    # Setup the model
     return BinomialBayesianTensorFiltering(nrows, ncols, ndepth,
                                                           nembeds=nembeds, tf_order=tf_order,
                                                           sigma2_init=sigma2, nthreads=1,
@@ -102,7 +102,7 @@ def init_model(tf_order=0, lam2=0.1, sigma2=0.5):
     # Constraints requiring positive means
     C_zero = np.concatenate([np.eye(ndepth), np.zeros((ndepth,1))], axis=1)
     
-    # Setup the lower bound inequalities
+    # Setup the model
     return ConstrainedNonconjugateBayesianTensorFiltering(nrows, ncols, ndepth,
                                                           rowcol_loglikelihood,
                                                           C_zero,

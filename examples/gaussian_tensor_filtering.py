@@ -19,11 +19,11 @@ nreplicates = 1
 nu2_truth = 9
 
 def init_model(tf_order=2, lam2=0.1, sigma2=0.5, nu2=1):
-    # Setup the lower bound inequalities
+    # Setup the model
     return GaussianBayesianTensorFiltering(nrows, ncols, ndepth,
-                                                          nembeds=nembeds, tf_order=tf_order,
-                                                          sigma2_init=sigma2, nthreads=1,
-                                                          lam2_init=lam2, nu2_init=nu2)
+                                              nembeds=nembeds, tf_order=tf_order,
+                                              sigma2_init=sigma2, nthreads=1,
+                                              lam2_init=lam2, nu2_init=nu2)
 
 def create_wiggly_with_jumps(break_prob=0.3):
     W = np.random.normal(0,1,size=(nrows, nembeds))
