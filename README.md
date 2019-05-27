@@ -7,17 +7,18 @@ pip install functionalmf
 Please open an issue if you have any trouble!
 
 ## Factorizing a functional matrix with `functionalmf`
-The general problem that `functionalmf` solves is that you have data in a 4-dimensional array:
+The general problem that `functionalmf` solves is that you have data in a 3- or 4-dimensional array:
 ```python
 import numpy as np
-data = np.load('examples/data.npy')
+data = ... # get your data as a numpy 3- or 4-tensor
 print('Data shape is {}'.format(data.shape))
-# Output: (10, 10, 10, 3)
+# Output: Data shape is (10, 11, 12, 3)
+# Means 10 rows, 11 functional columns, 12 points to evaluate each function, 3 repeated draws at each point
 ```
 And you want to factorize the matrix under the assumption:
 - **dim 1:** rows with latent attributes that remain fixed
 - **dim 2:** columns with latent attributes that change mostly-smoothly in **dim 3**
-- **dim 4:** replicates. if you have only a 3-tensor, just make this dim size 1.
+- **dim 4:** replicates. if you have only a 3-tensor, just make this dim size 1 or the code will do it for you implicitly.
 
 The specific class you should use depends on the likelihood function for your observations.
 
