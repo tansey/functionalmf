@@ -22,7 +22,6 @@ def rowcol_loglikelihood(Y, WV, row=None, col=None):
         Y = Y[row]
     if col is not None:
         Y = Y[:,col]
-    # missing = np.isnan(Y)
     if len(Y.shape) > len(WV.shape):
         WV = WV[...,None]
     import warnings
