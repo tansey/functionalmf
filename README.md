@@ -51,7 +51,7 @@ sigma2s = results['sigma2']
 Mu_hat = np.einsum('znk,zmtk->znmt', Ws, Vs)
 Mu_hat_mean = Mu_hat.mean(axis=0)
 ```
-See `examples/gaussian_tensor_filtering.py` for a full example .Results should look like:
+See `examples/gaussian_tensor_filtering.py` for a full example. Results should look like:
 
 ![Visualization of the Binomial functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/img/gaussian-tensor-filtering.png)
 
