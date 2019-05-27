@@ -20,6 +20,8 @@ And you want to factorize the matrix under the assumption:
 - **dim 2:** columns with latent attributes that change mostly-smoothly in **dim 3**
 - **dim 4:** replicates. if you have only a 3-tensor, just make this dim size 1 or the code will do it for you implicitly.
 
+**Missing data**: If you have missing data, it should be passed in as `np.nan` values in the data array.
+
 The specific class you should use depends on the likelihood function for your observations.
 
 ### Gaussian observations
