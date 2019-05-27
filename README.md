@@ -42,15 +42,12 @@ results = model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples
 ```
 And you can get the sampler results along with the inferred means:
 ```python
-Ws = results['W']
-Vs = results['V']
-Tau2s = results['Tau2']
-lam2s = results['lam2']
-sigma2s = results['sigma2']
+Ws = results['W'] # posterior samples of row embeddings
+Vs = results['V'] # posterior samples of functional column embeddings
 
 # Get the Bayes estimate
-Mu_hat = np.einsum('znk,zmtk->znmt', Ws, Vs)
-Mu_hat_mean = Mu_hat.mean(axis=0)
+Mu_hat = np.einsum('znk,zmtk->znmt', Ws, Vs) # dot product of all row x (column,depth) embeddings
+Mu_hat_mean = Mu_hat.mean(axis=0) # average over all posterior samples
 ```
 See `examples/gaussian_tensor_filtering.py` for a full example. Results should look like:
 
@@ -70,7 +67,7 @@ def init_model(nembeds=3, tf_order=2, lam2=0.1, sigma2=0.5):
 model = init_model()
 ```
 The result follows the Gaussian example above, EXCEPT you need to pass the resulting means through the inverse logit transform:
-```
+```python
 from functionalmf.utils import ilogit
 Mu_hat = ilogit(np.einsum('znk,zmtk->znmt', Ws, Vs))
 Mu_hat_mean = Mu_hat.mean(axis=0)
