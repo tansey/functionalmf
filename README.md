@@ -53,7 +53,7 @@ Mu_hat_mean = Mu_hat.mean(axis=0)
 ```
 See `examples/gaussian_tensor_filtering.py` for a full example .Results should look like:
 
-![Visualization of the Binomial functional matrix factorization](https://raw.githubusercontent.com/tansey/functionalmf/master/img/gaussian-tensor-filtering.png)
+![Visualization of the Binomial functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/img/gaussian-tensor-filtering.png)
 
 ### Binomial, Bernoulli, or Negative Binomial observations
 If your observations are binomial (or binary or negative binomial), you can use the Binomial sampler:
@@ -76,7 +76,7 @@ Mu_hat_mean = Mu_hat.mean(axis=0)
 ```
 See `examples/binomial_tensor_filtering.py` for a full example. Results should look like:
 
-![Visualization of the Binomial functional matrix factorization](https://raw.githubusercontent.com/tansey/functionalmf/master/img/binomial-tensor-filtering.png)
+![Visualization of the Binomial functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/img/binomial-tensor-filtering.png)
 
 
 ### Black box observations (Poisson example)
@@ -114,7 +114,7 @@ The code requires you provide it a log-likelihood function (`rowcol_loglikelihoo
 
 The rest of the code works the same as the above Gaussian sampler case. The results should look like this:
 
-![Visualization of the Poisson functional matrix factorization](https://raw.githubusercontent.com/tansey/functionalmf/master/img/poisson-tensor-filtering.png)
+![Visualization of the Poisson functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/img/poisson-tensor-filtering.png)
 
 The blue bars show the NMF-based EP approximation that centers the sampler. The orange line is the fit.
 
@@ -126,7 +126,7 @@ Dealing with dose-response modeling in multi-drug, multi-sample studies requires
 ## Generalized analytic slice sampling
 Included in the BTF code at `functionalmf/gass.py` is a standalone tool for sampling from posteriors with truncated multivariate normal priors. The model enables linear constraints and arbitrary likelihoods. The script includes a runnable example of a truncated, monotone GP. The result looks something like this:
 
-![Visualization of the monotone GP](https://raw.githubusercontent.com/tansey/functionalmf/master/img/gass.png)
+![Visualization of the monotone GP](https://github.com/tansey/functionalmf/raw/master/img/gass.png)
 
 Orange bands represent 90% Bayesian credible intervals.
 
