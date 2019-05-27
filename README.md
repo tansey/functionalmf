@@ -8,7 +8,7 @@ Please open an issue if you have any trouble!
 
 ## Factorizing a functional matrix with `functionalmf`
 The general problem that `functionalmf` solves is that you have data in a 4-dimensional array:
-```
+```python
 import numpy as np
 data = np.load('examples/data.npy')
 print('Data shape is {}'.format(data.shape))
@@ -23,7 +23,7 @@ The specific class you should use depends on the likelihood function for your ob
 
 ### Gaussian observations
 If your observations are real-valued and generally assumed to follow a normal distribution for errors:
-```
+```python
 from functionalmf.factor import GaussianBayesianTensorFiltering
 
 def init_model(nembeds=3, tf_order=2, lam2=0.1, sigma2=0.5, nu2=1):
@@ -36,11 +36,11 @@ def init_model(nembeds=3, tf_order=2, lam2=0.1, sigma2=0.5, nu2=1):
 model = init_model()
 ```
 You can then run the Gibbs sampler on the model with:
-```
+```python
 results = model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=50, verbose=True)
 ```
 And you can get the sampler results along with the inferred means:
-```
+```python
 Ws = results['W']
 Vs = results['V']
 Tau2s = results['Tau2']
@@ -57,7 +57,7 @@ See `examples/gaussian_tensor_filtering.py` for a full example. Results should l
 
 ### Binomial, Bernoulli, or Negative Binomial observations
 If your observations are binomial (or binary or negative binomial), you can use the Binomial sampler:
-```
+```python
 from functionalmf.factor import BinomialBayesianTensorFiltering
 def init_model(nembeds=3, tf_order=2, lam2=0.1, sigma2=0.5):
     # Setup the model
@@ -81,7 +81,7 @@ See `examples/binomial_tensor_filtering.py` for a full example. Results should l
 
 ### Black box observations (Poisson example)
 If you have a likelihood that is not in one of the conjugate or conditionally-conjugate categories above, you can use the non-conjugate sampler. This example focuses on a Poisson likelihood, common with count data, where the latent rate is constrained to be positive everywhere:
-```
+```python
 from functionalmf.factor import ConstrainedNonconjugateBayesianTensorFiltering
 
 def rowcol_loglikelihood(Y, WV, row=None, col=None):
