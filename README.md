@@ -135,12 +135,11 @@ Known issues that come up installing and using the library are below.
 - You may have trouble with `sksparse` on MacOSX using conda. A solution is to install suitesparse: `conda install -c conda-forge suitesparse`
 
 # Citing this code
-If you use this code, please cite the following:
+If you use this code, please cite the following paper ([available here](https://arxiv.org/abs/1906.04072)):
 ```
 Bayesian Tensor Filtering: Smooth, Locally-Adaptive Factorization of Functional Matrices
 W. Tansey, C. Tosh, D.M. Blei
 arXiv preprint arXiv:1906.04072
-arxiv.org/abs/1906.04072
 ```
 Bibtex entry:
 ```
