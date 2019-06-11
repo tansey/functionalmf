@@ -146,7 +146,7 @@ Bibtex entry:
 @article{tansey:etal:2019:btf,
   title={Bayesian Tensor Filtering: Smooth, Locally-Adaptive Factorization of Functional Matrices},
   author={Tansey, Wesley and Tosh, Christopher and Blei, David M.},
-  journal={arXiv preprint arXiv:1906.?},
+  journal={arXiv preprint arXiv:1906.04072},
   year={2019}
 }
 ```
