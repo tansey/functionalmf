@@ -139,7 +139,8 @@ If you use this code, please cite the following:
 ```
 Bayesian Tensor Filtering: Smooth, Locally-Adaptive Factorization of Functional Matrices
 W. Tansey, C. Tosh, D.M. Blei
-arXiv preprint arXiv:1906.?
+arXiv preprint arXiv:1906.04072
+arxiv.org/abs/1906.04072
 ```
 Bibtex entry:
 ```
