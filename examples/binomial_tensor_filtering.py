@@ -17,7 +17,7 @@ ndepth = 20
 nembeds = 3
 nreplicates = 10
 
-def init_model(tf_order=2, lam2=0.1, sigma2=0.5, nu2=1):
+def init_model(tf_order=2, lam2=0.1, sigma2=0.5):
     # Setup the model
     return BinomialBayesianTensorFiltering(nrows, ncols, ndepth,
                                               nembeds=nembeds, tf_order=tf_order,

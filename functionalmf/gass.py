@@ -132,6 +132,162 @@ def gass(x, Sigma, loglikelihood, Constraints,
     return x, new_ll
 
 
+def benchmarks():
+    '''Benchmarking GASS vs.
+    1) naive ESS + rejection sampling
+    2) logistic ESS + rejection sampling for monotonicity
+    3) logistic ESS + posterior projection'''
+    from functionalmf.elliptical_slice import elliptical_slice as ess
+    from functionalmf.utils import ilogit, pav
+    from scipy.stats import gamma
+    np.random.seed(42)
+    ntrials = 100
+    nmethods = 5
+    nobs = 3
+    sample_sizes = np.array([100, 500, 1000, 5000, 10000], dtype=int)
+    nsizes = len(sample_sizes)
+    nburn = nsamples = sample_sizes.max()
+    verbose = True
+
+
+    mu_prior = np.array([0.95, 0.8, 0.75, 0.5, 0.29, 0.2, 0.17, 0.15, 0.15]) # monotonic curve prior
+    T = len(mu_prior)
+
+    mse = np.zeros((ntrials,nsizes,nmethods))
+    coverage = np.zeros((ntrials, nsizes, nmethods,T), dtype=bool)
+    for trial in range(ntrials):
+        print('Trial {}'.format(trial))
+        b = 3
+        min_mu, max_mu = 0.1, 1
+        sigma_prior = 0.1*np.array([np.exp(-0.5*(i - np.arange(T))**2 / b) for i in range(T)]) # Squared exponential kernel
+        
+        # Sample the true mean via rejection sampling
+        mu_truth = np.random.multivariate_normal(mu_prior, sigma_prior)
+        while mu_truth.min() < min_mu or mu_truth.max() > max_mu or (mu_truth[1:] - mu_truth[:-1]).max() > 0:
+            mu_truth = np.random.multivariate_normal(mu_prior, sigma_prior)
+        
+        print(mu_truth)
+        
+        # Plot some data points using the true scale
+        data = np.array([np.random.gamma(100, scale=mu_truth) for _ in range(nobs)]).T
+        samples = np.zeros((nsamples, nmethods, T))
+
+        xobs = np.tile(np.arange(T), (nobs, 1)).T
+
+        # Linear constraints requiring monotonicity and [0, 1] intervals
+        C_zero = np.concatenate([np.eye(T), np.zeros((T,1))+min_mu], axis=1)
+        C_one = np.concatenate([np.eye(T)*-1, np.ones((T,1))*-1 ], axis=1)
+        C_mono = np.array([np.concatenate([np.zeros(i), [1,-1], np.zeros(T-i-2), [0]]) for i in range(T-1)])
+
+        # Setup the lower bound inequalities
+        C_lower = np.concatenate([C_zero, C_one, C_mono], axis=0)
+
+        # Initialize to be a simple line trending downward (i.e. reasonable guess)
+        x = ((T - np.arange(T)) / T).clip(min_mu+0.01, max_mu-0.01)
+        x = np.tile(x, nmethods).reshape(nmethods, T)
+        
+        # Convert to logits for the logistic models
+        x[2] = np.log(x[2] / (1-x[2]))
+        x[4] = np.log(x[4] / (1-x[4]))
+
+        # Simple iid N(y | mu, sigma^2) likelihood
+        def log_likelihood(z, ll_args):
+            if len(z.shape) == len(data.shape):
+                return gamma.logpdf(data[None], 100, scale=z[...,None]).sum(axis=-1).sum(axis=-1)
+            return gamma.logpdf(data, 100, scale=z[...,None]).sum()
+
+        # Log likelihood where we don't assume everything is valid
+        def rejection_loglike(z, ll_args):
+            if ll_args == 'logistic':
+                z = ilogit(z)
+            if z.min() < min_mu or z.max() > max_mu or (z[1:] - z[:-1]).max() > 0:
+                return -np.inf
+            return log_likelihood(z, ll_args)
+
+        # Generalized analytic slice sampling
+        cur_ll = [None]*nmethods
+        for step in range(nburn+nsamples):
+            if verbose and step % 1000 == 0:
+                print(step)
+            # import warnings
+            # warnings.filterwarnings("error")
+            # Generalized analytic slice sampling
+            x[0], cur_ll[0] = gass(x[0], sigma_prior, log_likelihood, C_lower, cur_ll=cur_ll[0], mu=mu_prior)
+
+            # Naive ESS + rejection sampling
+            x[1], cur_ll[1] = ess(x[1], sigma_prior, rejection_loglike, cur_log_like=cur_ll[1], mu=mu_prior)
+
+            # Logistic ESS + rejection sampling
+            x[2], cur_ll[2] = ess(x[2], sigma_prior, rejection_loglike, cur_log_like=cur_ll[2], mu=mu_prior, ll_args='logistic')
+
+            # Naive ESS + posterior projection
+            x[3], cur_ll[3] = ess(x[3], sigma_prior, log_likelihood, cur_log_like=cur_ll[3], mu=mu_prior)
+
+            # Logistic ESS + posterior projection
+            x[4], cur_ll[4] = ess(x[4], sigma_prior, lambda x_prop, ll_args: log_likelihood(ilogit(x_prop), ll_args),
+                                    cur_log_like=cur_ll[4], mu=mu_prior)
+
+            # Save posterior samples
+            if step >= nburn:
+                samples[step-nburn] = x
+
+        # Pass the results for logistic models through the logistic function
+        samples[:,(2,4)] = ilogit(samples[:,(2,4)])
+
+        # Project the posteriors using PAV
+        print('Projecting third and fourth method posteriors')
+        for i in range(nsamples):
+            samples[i,3] = pav(samples[i,3][::-1]).clip(0,1)[::-1]
+            samples[i,4] = pav(samples[i,4][::-1]).clip(0,1)[::-1]
+
+        for size_idx, sample_size in enumerate(sample_sizes):
+            mu_hat = samples[:sample_size].mean(axis=0)
+            mu_lower = np.percentile(samples[:sample_size], 5, axis=0)
+            mu_upper = np.percentile(samples[:sample_size], 95, axis=0)
+
+            np.set_printoptions(precision=2, suppress=True)
+            # Calculate the mean squared error
+            mse[trial,size_idx] = ((mu_truth[None] - mu_hat)**2).mean(axis=-1)
+
+            # Calculate the 90th credible interval coverage
+            coverage[trial,size_idx] = (mu_truth[None] >= mu_lower) & (mu_truth[None] <= mu_upper)
+            
+            print('Samples={} MSE={} Coverage={}'.format(sample_size,
+                                                        mse[:trial+1,size_idx].mean(axis=0) * 1e3,
+                                                        coverage[:trial+1,size_idx].mean(axis=0).mean(axis=1)))
+        print()
+
+            
+        if trial == 0:
+            np.save('data/gass-benchmark-samples.npy', samples)
+            xobs = np.tile(np.arange(T), (nobs, 1)).T
+            # plt.scatter(xobs, data)
+            plt.plot(xobs[:,0], mu_hat[1], color='0.25', ls='--', label='ESS+Rejection')
+            plt.plot(xobs[:,0], mu_hat[2], color='0.4', ls=':', label='ESS+Link+Rejection')
+            plt.plot(xobs[:,0], mu_hat[3], color='0.65', ls='--', label='ESS+Projection')
+            plt.plot(xobs[:,0], mu_hat[4], color='0.8', ls=':', label='ESS+Link+Projection')
+            plt.plot(xobs[:,0], mu_hat[0], color='orange', label='GASS')
+            plt.plot(xobs[:,0], mu_truth, color='black', label='Truth')
+            # plt.fill_between(xobs[:,0], mu_lower, mu_upper, color='orange', alpha=0.5,)
+            plt.axhline(1, color='purple', ls='--', label='Upper bound')
+            plt.axhline(0, color='red', ls='--', label='Lower bound')
+            plt.legend(loc='lower left', ncol=2)
+            plt.savefig('plots/gass-benchmark.pdf', bbox_inches='tight')
+            plt.close()
+            
+            
+    np.save('data/gass-benchmark-mse.npy', mse)
+    np.save('data/gass-benchmark-coverage.npy', coverage)
+
+    mse = mse * 1e3
+    mse_mean, mse_stderr = mse.mean(axis=0), mse.std(axis=0) / np.sqrt(mse.shape[0])
+    coverage_mean, coverage_stderr = coverage.mean(axis=-1).mean(axis=0), coverage.mean(axis=-1).std(axis=0) / np.sqrt(coverage.shape[0])
+    for i in range(nmethods):
+        print(' & '.join(['${:.2f} \\pm {:.2f}$'.format(m,s) for m,s in zip(mse_mean[:,i], mse_stderr[:,i])]))
+    print()
+    for i in range(nmethods):
+        print(' & '.join(['${:.2f} \\pm {:.2f}$'.format(m,s) for m,s in zip(coverage_mean[:,i], coverage_stderr[:,i])]))
+
 if __name__ == '__main__':
     np.random.seed(42)
     nobs = 5
@@ -200,7 +356,4 @@ if __name__ == '__main__':
     plt.legend(loc='lower left')
     plt.savefig('plots/gass.pdf', bbox_inches='tight')
     plt.close()
-
-
-
 
