@@ -506,7 +506,6 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
 
         self.executor = futures.ThreadPoolExecutor(max_workers=self.nthreads)
 
-
     def _resample_W(self, data):
         # Get the constraints given the current values of V
         Constraints = self._w_constraints()

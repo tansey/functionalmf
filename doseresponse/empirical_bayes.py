@@ -36,11 +36,13 @@ def estimate_likelihood(df, nbins=50, control_mean=1, tensor_outcomes=False, plo
     from collections import defaultdict
     cells = list(df['cell line'].unique())
     drugs = list(df['drug'].unique())
-    concentrations = sorted(df['concentration'].unique())[1:]
+    concentrations = [c for c in sorted(df['concentration'].unique()) if not np.isnan(c)]
     print('Concentration values:', concentrations)
     outcomes = defaultdict(list)
     controls = defaultdict(list)
     for idx, row in df.iterrows():
+        if idx % 1000 == 0:
+            print(idx)
         cell = cells.index(row['cell line'])
         drug = drugs.index(row['drug'])
         conc = row['concentration']
@@ -72,17 +74,18 @@ def estimate_likelihood(df, nbins=50, control_mean=1, tensor_outcomes=False, plo
                 continue
             obs0 = controls[(cell,drug)] # control observations
             obs1 = outcomes[(cell, drug, 0)] # first dosage observation
-            if np.mean(obs1) > control_mean:
+            if len(obs1) > 0 and np.mean(obs1) > control_mean:
                 # Look at cases where first dosage is higher than control
                 # to estimate variation in cell concentration
                 # NOTE: this is under-estimating variance since the
                 # first dosage may have some small effect even when the
                 # mean is higher than the control
-                means.append(np.mean(obs1))
+                means.append(np.mean(obs1))    
             # Track the distribution of noise in the controls to estimate
             # observation noise
             noise.extend((np.array(obs0) - control_mean)**2)
     means, noise = np.array(means), np.array(noise).mean()
+
 
     import matplotlib
     import statsmodels.api as sm

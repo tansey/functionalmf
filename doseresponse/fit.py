@@ -6,14 +6,16 @@ from functionalmf.factor import ConstrainedNonconjugateBayesianTensorFiltering
 from functionalmf.utils import tensor_nmf, ep_from_mf, factor_pav, mse
 
 def init_model(Y, likelihood, args):
-    # Linear constraints requiring monotonicity and positive means
+    # Linear constraints requiring monotonicity and [0,1] means.
+    # Note that we use a softened monotonicity constraint allowing a small
+    # fudge factor for numerical stability.
     C_zero = np.concatenate([np.eye(ndepth), np.zeros((ndepth,1))], axis=1)
-    # C_mono = np.array([np.concatenate([np.zeros(i), [1,-1], np.zeros(ndepth-i-2), [0]]) for i in range(ndepth-1)])
+    C_mono = np.array([np.concatenate([np.zeros(i), [1,-1], np.zeros(ndepth-i-2), [-1e-2]]) for i in range(ndepth-1)])
     C_one = np.concatenate([np.eye(ndepth)*-1, np.full((ndepth,1),-1)], axis=1)
-    C = np.concatenate([C_zero, C_one], axis=0)
+    C = np.concatenate([C_zero, C_one, C_mono], axis=0)
 
     # Initialize the model with a nonnegative matrix factorization on the clipped values
-    W, V = tensor_nmf(Y, args.nembeds, monotone=False, max_entry=0.999)
+    W, V = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999, verbose=True)
     
     # Sanity check that we're starting at valid points
     Mu = (W[:,None,None] * V[None]).sum(axis=-1)
@@ -86,7 +88,9 @@ if __name__ == '__main__':
 
     # Seed the random number generator so we get reproducible results
     np.random.seed(args.seed)
-    
+    import random
+    random.seed(args.seed)
+
     # Load the data
     df = load_data_as_pandas(args.data)
 
@@ -115,10 +119,19 @@ if __name__ == '__main__':
             invalid = np.any(np.all(np.isnan(Y_candidate), axis=(1,2,3))) | np.any(np.all(np.isnan(Y_candidate), axis=(0,2,3)))
         
         # Remove the held out data points but keep track of them for evaluation at the end
-        held_out = selected
+        held_out = selected.T
         Y_full = Y
         Y = Y_candidate
         print(held_out)
+
+    # Get the raw NMF as a baseline
+    W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999)
+    Mu_nmf = (W_nmf[:,None,None] * V_nmf[None]).sum(axis=-1)
+    
+    # Get the monotone projected NMF as a baseline
+    W_nmf_proj, V_nmf_proj = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999)
+    Mu_nmf_proj = (W_nmf_proj[:,None,None] * V_nmf_proj[None]).sum(axis=-1)
+
 
     print('Initializing model')
     model = init_model(Y, likelihood, args)
@@ -142,8 +155,7 @@ if __name__ == '__main__':
     #         else:
     #             ax.scatter(X, Y[i,j], color='gray')
     #         plt.ylim([0, np.nanmax(Y)+0.01])
-    #         # plt.savefig('plots/cumc.pdf', bbox_inches='tight')
-    #         plt.savefig('plots/cumc-{}-{}.pdf'.format(i,j), bbox_inches='tight')
+    #         plt.savefig('plots/smc/initial/{}-{}.pdf'.format(i,j), bbox_inches='tight')
     #         plt.close()
 
     print('Running Gibbs sampler. Settings: burn={} thin={} samples={}'.format(args.nburn, args.nthin, args.nsamples))
@@ -172,27 +184,36 @@ if __name__ == '__main__':
     Mu_hat_proj_upper = np.percentile(Mu_hat_proj, 95, axis=0)
     Mu_hat_proj_lower = np.percentile(Mu_hat_proj, 5, axis=0)
 
-    # Get the raw NMF as a baseline
-    W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999)
-    Mu_nmf = (W_nmf[:,None,None] * V_nmf[None]).sum(axis=-1)
     
-    # Get the monotone projected NMF as a baseline
-    W_nmf_proj, V_nmf_proj = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999)
-    Mu_nmf_proj = (W_nmf_proj[:,None,None] * V_nmf_proj[None]).sum(axis=-1)
-
     print('RMSE on in-sample observations:')
     print('NMF:                     {}'.format(np.sqrt(mse(Mu_nmf[...,None], Y))))
     print('Monotone NMF:            {}'.format(np.sqrt(mse(Mu_nmf_proj[...,None], Y))))
     print('Posterior mean:          {}'.format(np.sqrt(mse(Mu_hat_mean[...,None], Y))))
-    print('Monotone posterior mean: {}'.format(np.sqrt(mse(Mu_hat_proj_mean[...,None], Y))))
+    # print('Monotone posterior mean: {}'.format(np.sqrt(mse(Mu_hat_proj_mean[...,None], Y))))
     print()
 
+    def nll(pred, data):
+        return -np.nansum(likelihood.logpdf(data, pred))
+    print('NLL on in-sample observations:')
+    print('NMF:                     {}'.format(nll(Mu_nmf[...,None], Y)))
+    print('Monotone NMF:            {}'.format(nll(Mu_nmf_proj[...,None], Y)))
+    print('Posterior mean:          {}'.format(nll(Mu_hat_mean[...,None], Y)))
+    # print('Monotone posterior mean: {}'.format(nll(Mu_hat_proj_mean[...,None], Y)))
+    print()
+    
     if args.nholdout > 0:
         print('RMSE on held out observations:')
         print('NMF:                     {}'.format(np.sqrt(mse(Mu_nmf[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
         print('Monotone NMF:            {}'.format(np.sqrt(mse(Mu_nmf_proj[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
         print('Posterior mean:          {}'.format(np.sqrt(mse(Mu_hat_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
-        print('Monotone posterior mean: {}'.format(np.sqrt(mse(Mu_hat_proj_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
+        # print('Monotone posterior mean: {}'.format(np.sqrt(mse(Mu_hat_proj_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
+        print()
+
+        print('NLL on held out observations:')
+        print('NMF:                     {}'.format(nll(Mu_nmf[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
+        print('Monotone NMF:            {}'.format(nll(Mu_nmf_proj[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
+        print('Posterior mean:          {}'.format(nll(Mu_hat_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
+        # print('Monotone posterior mean: {}'.format(nll(Mu_hat_proj_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
         print()
     
 
@@ -214,6 +235,7 @@ if __name__ == '__main__':
 
     if args.plot:
         print('Plotting results')
+        Y = Y_full # Plot the full dataset
         if not os.path.exists(args.plotdir):
             os.makedirs(args.plotdir)
         if args.big_plot:
