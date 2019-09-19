@@ -12,6 +12,8 @@ def estimate_likelihood(df):
     outcomes = defaultdict(list)
     controls = defaultdict(list)
     for idx, row in df.iterrows():
+        if idx % 1000 == 0:
+            print(idx)
         cell = cells.index(row['cell line'])
         drug = drugs.index(row['drug'])
         conc = row['concentration']
@@ -59,8 +61,8 @@ def fit_logistic_factors(Y, nembeds, max_steps=100, concentrations=None, verbose
         for i in range(W.shape[0]):
             def fun(x):
                 logit = np.einsum('k,mk,t->mt', x[1:], V, concentrations) + x[0] + b[:,None]
-                return np.nansum((Y[i] - ilogit(logit))**2) + regularizer*(x**2).sum()
-            bounds = [(-10, 10) for _ in range(nembeds+1)]
+                return np.nansum((Y[i] - ilogit(logit))**2) + regularizer*(x**2).mean()
+                bounds = [(-10, 10) for _ in range(nembeds+1)]
             res = minimize(fun, x0=np.concatenate([a[i:i+1], W[i]]), method='SLSQP', options={'ftol':1e-8, 'maxiter':1000}, bounds=bounds)
             a[i], W[i] = res.x[0], res.x[1:]
 
@@ -68,7 +70,7 @@ def fit_logistic_factors(Y, nembeds, max_steps=100, concentrations=None, verbose
         for j in range(V.shape[0]):
             def fun(x):
                 logit = np.einsum('k,nk,t->nt', x[1:], W, concentrations) + x[0] + a[:,None]
-                return np.nansum((Y[:,j] - ilogit(logit))**2) + regularizer*(x**2).sum()
+                return np.nansum((Y[:,j] - ilogit(logit))**2) + regularizer*(x**2).mean()
             bounds = [(-10, 10) for _ in range(nembeds+1)]
             res = minimize(fun, x0=np.concatenate([b[j:j+1], V[j]]), method='SLSQP', options={'ftol':1e-8, 'maxiter':1000}, bounds=bounds)
             b[j], V[j] = res.x[0], res.x[1:]
