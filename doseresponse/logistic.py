@@ -7,7 +7,7 @@ def estimate_likelihood(df):
     from collections import defaultdict
     cells = list(df['cell line'].unique())
     drugs = list(df['drug'].unique())
-    concentrations = sorted(df['concentration'].unique())[1:]
+    concentrations = [c for c in sorted(df['concentration'].unique()) if not np.isnan(c)]
     print('Concentration values:', concentrations)
     outcomes = defaultdict(list)
     controls = defaultdict(list)

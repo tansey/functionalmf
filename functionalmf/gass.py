@@ -209,8 +209,8 @@ def benchmarks():
         for step in range(nburn+nsamples):
             if verbose and step % 1000 == 0:
                 print(step)
-            # import warnings
-            # warnings.filterwarnings("error")
+            import warnings
+            warnings.simplefilter("ignore")
             # Generalized analytic slice sampling
             x[0], cur_ll[0] = gass(x[0], sigma_prior, log_likelihood, C_lower, cur_ll=cur_ll[0], mu=mu_prior)
 
@@ -274,7 +274,26 @@ def benchmarks():
             plt.legend(loc='lower left', ncol=2)
             plt.savefig('plots/gass-benchmark.pdf', bbox_inches='tight')
             plt.close()
-            
+
+            import seaborn as sns
+            methods = ['GASS', 'RS', 'LRS', 'PP', 'LPP']
+            for midx, method in enumerate(methods):
+                with sns.axes_style('white'):
+                    plt.rc('font', weight='bold')
+                    plt.rc('grid', lw=3)
+                    plt.rc('lines', lw=3)
+                    matplotlib.rcParams['pdf.fonttype'] = 42
+                    matplotlib.rcParams['ps.fonttype'] = 42
+                    # plt.scatter(xobs, data, color='gray', alpha=0.5)
+                    plt.plot(xobs[:,0], mu_truth, color='black', label='Truth')
+                    plt.plot(xobs[:,0], mu_hat[midx], color='orange', label=method)
+                    plt.fill_between(xobs[:,0], mu_lower[midx], mu_upper[midx], color='orange', alpha=0.5)
+                    plt.axhline(max_mu, color='red', ls='--', label='Upper bound')
+                    plt.axhline(min_mu, color='red', ls='--', label='Lower bound')
+                    plt.ylabel('Gamma scale', fontsize=14)
+                    plt.savefig('plots/gass-example-{}.pdf'.format(method.lower()), bbox_inches='tight')
+                    plt.close()
+        
             
     np.save('data/gass-benchmark-mse.npy', mse)
     np.save('data/gass-benchmark-coverage.npy', coverage)
@@ -289,6 +308,7 @@ def benchmarks():
         print(' & '.join(['${:.2f} \\pm {:.2f}$'.format(m,s) for m,s in zip(coverage_mean[:,i], coverage_stderr[:,i])]))
 
 if __name__ == '__main__':
+    benchmarks()
     np.random.seed(42)
     nobs = 5
     nburn, nsamples = 10000, 10000

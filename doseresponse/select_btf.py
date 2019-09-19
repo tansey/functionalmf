@@ -57,14 +57,14 @@ if __name__ == '__main__':
 
                     Y_train = np.load(os.path.join(curdir, 'y.npy'))
                     Mu_hat = np.load(os.path.join(curdir, 'btf.npy'))
-                    Mu_hat_proj = np.load(os.path.join(curdir, 'btf_mono.npy'))
+                    # Mu_hat_proj = np.load(os.path.join(curdir, 'btf_mono.npy'))
 
                     if args.nthin > 1:
                         Mu_hat = Mu_hat[::args.nthin]
                         Mu_hat_proj = Mu_hat_proj[::args.nthin]
 
                     results[sidx, kidx, tidx, lidx] = dic(Y_train, Mu_hat, likelihood)
-                    results_mono[sidx, kidx, tidx, lidx] = dic(Y_train, Mu_hat_proj, likelihood)
+                    # results_mono[sidx, kidx, tidx, lidx] = dic(Y_train, Mu_hat_proj, likelihood)
 
                     print(seed, emb, tf, lam)
                     print(results[sidx, kidx, tidx, lidx])

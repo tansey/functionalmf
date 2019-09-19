@@ -97,10 +97,15 @@ if __name__ == '__main__':
     print('Loading data and performing empirical Bayes likelihood estimate')
     Y, likelihood, cells, drugs, concentrations, control_obs = estimate_likelihood(df, nbins=args.nbins, tensor_outcomes=True, plot=args.plot)
 
+    np.save(os.path.join(args.outdir, 'cells'), cells)
+    np.save(os.path.join(args.outdir, 'drugs'), drugs)
+
+    present = np.any(np.any(~np.isnan(Y), axis=-1), axis=-1).sum()
+    print('Shape: {} x {} x {} x {}. Total possible curves: {} Total present: {} Total missing: {}'.format(Y.shape[0], Y.shape[1], Y.shape[2], Y.shape[3], Y.shape[0] * Y.shape[1], present, Y.shape[0] * Y.shape[1] - present))
+
     # Get the dimensions of the data
     nrows, ncols, ndepth, nreplicates = Y.shape
     X = np.arange(ndepth)
-    print('Y shape: {}'.format(Y.shape))
 
     # Hold out a subset of entries for validation
     if args.nholdout > 0:
@@ -125,10 +130,14 @@ if __name__ == '__main__':
         print(held_out)
 
     # Get the raw NMF as a baseline
-    W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999)
+    print('Fitting NMF')
+    W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999, verbose=True)
     Mu_nmf = (W_nmf[:,None,None] * V_nmf[None]).sum(axis=-1)
+    np.save(os.path.join(args.outdir, 'nmf_w'), W_nmf)
+    np.save(os.path.join(args.outdir, 'nmf_v'), V_nmf)
     
     # Get the monotone projected NMF as a baseline
+    print('Fitting Monotone NMF')
     W_nmf_proj, V_nmf_proj = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999)
     Mu_nmf_proj = (W_nmf_proj[:,None,None] * V_nmf_proj[None]).sum(axis=-1)
 

@@ -13,7 +13,8 @@ if __name__ == '__main__':
                 {'name': 'Logistic MF', 'file': 'logistic_mf.npy', 'preprocess': lambda x: x},
                 {'name': 'BTF', 'file': 'btf.npy', 'preprocess': lambda x: x.mean(axis=0)},
                 {'name': 'Monotone NMF', 'file': 'nmf_mono.npy', 'preprocess': lambda x: x},
-                {'name': 'Monotone BTF', 'file': 'btf_mono.npy', 'preprocess': lambda x: x.mean(axis=0)}]
+                # {'name': 'Monotone BTF', 'file': 'btf_mono.npy', 'preprocess': lambda x: x.mean(axis=0)}
+                ]
     nmodels = len(models)
 
 

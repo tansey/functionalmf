@@ -302,6 +302,8 @@ def tensor_nmf(Y, nembeds, max_steps=30, monotone=False, tol=1e-4, verbose=False
         # Fix V and fit W
         V_mat = np.repeat(V.reshape((-1, V.shape[-1])), Y.shape[-1], axis=0)
         for i in range(W.shape[0]):
+            if verbose:
+                print('\tRow {}/{}'.format(i+1, W.shape[0]))
             # Get the vector of observations for this row
             Y_vec = Y[i].flatten()
 
@@ -330,7 +332,11 @@ def tensor_nmf(Y, nembeds, max_steps=30, monotone=False, tol=1e-4, verbose=False
         # Fix W and fit V
         W_mat = np.repeat(W, Y.shape[-1], axis=0)
         for j in range(V.shape[0]):
+            if verbose:
+                print('\tColumn {}/{}'.format(j+1, V.shape[0]))
             for k in range(V.shape[1]):
+                if verbose:
+                    print('\t\tAisle {}/{}'.format(k+1, V.shape[1]))
                 # Get the vector of observations for this row
                 Y_vec = Y[:,j,k].flatten()
 
