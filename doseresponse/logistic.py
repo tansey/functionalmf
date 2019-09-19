@@ -63,6 +63,7 @@ def fit_logistic_factors(Y, nembeds, max_steps=100, concentrations=None, verbose
                 logit = np.einsum('k,mk,t->mt', x[1:], V, concentrations) + x[0] + b[:,None]
                 return np.nansum((Y[i] - ilogit(logit))**2) + regularizer*(x**2).mean()
                 bounds = [(-10, 10) for _ in range(nembeds+1)]
+            bounds = [(-10, 10) for _ in range(nembeds+1)]
             res = minimize(fun, x0=np.concatenate([a[i:i+1], W[i]]), method='SLSQP', options={'ftol':1e-8, 'maxiter':1000}, bounds=bounds)
             a[i], W[i] = res.x[0], res.x[1:]
 
