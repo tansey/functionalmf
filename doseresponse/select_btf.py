@@ -70,12 +70,14 @@ if __name__ == '__main__':
                     print(results[sidx, kidx, tidx, lidx])
                     print(results_mono[sidx, kidx, tidx, lidx])
                     
-    for sidx, seed in enumerate(args.seeds):
-        sel_k, sel_t, sel_l = np.unravel_index(results[sidx].argmin(), results.shape[1:])
-        print('Raw  seed: {} nembeds: {} tf_order: {} lam2: {}'.format(seed, args.nembeds[sel_k], args.tf_order[sel_t], args.lam2[sel_l]))
+    with open(os.path.join(args.basedir, 'selection_results.txt'), 'w') as f:
+        for sidx, seed in enumerate(args.seeds):
+            sel_k, sel_t, sel_l = np.unravel_index(results[sidx].argmin(), results.shape[1:])
+            print('Raw  seed: {} nembeds: {} tf_order: {} lam2: {}'.format(seed, args.nembeds[sel_k], args.tf_order[sel_t], args.lam2[sel_l]), file=f)
 
-        sel_k, sel_t, sel_l = np.unravel_index(results_mono[sidx].argmin(), results_mono.shape[1:])
-        print('Proj seed: {} nembeds: {} tf_order: {} lam2: {}'.format(seed, args.nembeds[sel_k], args.tf_order[sel_t], args.lam2[sel_l]))
+            sel_k, sel_t, sel_l = np.unravel_index(results_mono[sidx].argmin(), results_mono.shape[1:])
+            print('Proj seed: {} nembeds: {} tf_order: {} lam2: {}'.format(seed, args.nembeds[sel_k], args.tf_order[sel_t], args.lam2[sel_l]), file=f)
+            print('',file=f)
 
                     
 
