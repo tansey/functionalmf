@@ -30,7 +30,7 @@ if __name__ == '__main__':
     parser.add_argument('--data', default='data/cumc.csv', help='Location of the data file.')
     parser.add_argument('--basedir', default='doseresponse/data/', help='Directory where all results will be saved.')
     parser.add_argument('--seeds', nargs='+', type=int, default=[1,2,3,4,5], help='Different random seeds used for independent trials.')
-    parser.add_argument('--nembeds', nargs='+', type=int, default=[3,5,8], help='Different embedding sizes in the grid search.')
+    parser.add_argument('--nembeds', nargs='+', type=int, default=[3,5,8,10,15], help='Different embedding sizes in the grid search.')
     parser.add_argument('--tf_order', nargs='+', type=int, default=[0,1], help='Different tf_order values in the grid search.')
     parser.add_argument('--lam2', nargs='+', type=int, default=[1e-3,1e-2,1e-1], help='Different lam2 values used in the grid search.')
     parser.add_argument('--nbins', type=int, default=20, help='Number of bins to use for the empirical Bayes likelihood estimate.')
@@ -61,7 +61,7 @@ if __name__ == '__main__':
 
                     if args.nthin > 1:
                         Mu_hat = Mu_hat[::args.nthin]
-                        Mu_hat_proj = Mu_hat_proj[::args.nthin]
+                        # Mu_hat_proj = Mu_hat_proj[::args.nthin]
 
                     results[sidx, kidx, tidx, lidx] = dic(Y_train, Mu_hat, likelihood)
                     # results_mono[sidx, kidx, tidx, lidx] = dic(Y_train, Mu_hat_proj, likelihood)
