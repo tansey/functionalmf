@@ -6,7 +6,7 @@ from functionalmf.factor import ConstrainedNonconjugateBayesianTensorFiltering
 from functionalmf.utils import tensor_nmf, ep_from_mf, factor_pav, mse, mae
 
 
-def rowcol_likelihood(Y_obs, WV, W, V, U, row=None, col=None):
+def rowcol_likelihood(Y_obs, WV, W, V, extra, row=None, col=None):
     if row is not None:
         Y_obs = Y_obs[row]
     if col is not None:
@@ -15,7 +15,8 @@ def rowcol_likelihood(Y_obs, WV, W, V, U, row=None, col=None):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         z = np.nansum(likelihood.logpdf(Y_obs, WV[...,None]))
-        if row is not None and U is not None:
+        if row is not None and extra is not None:
+            X, U = extra
             WU = W.dot(U[:,:W.shape[-1]].T)
             z += np.nansum(X[row]*np.log(WU) + (1-X[row])*np.log(1-WU), axis=-1)
     return z
@@ -102,12 +103,12 @@ def init_model(Y, likelihood, args):
                     U_samples[sidx] = U
 
             callback = U_step
-            extra_args = U
+            extra_args = (X,U)
         else:
             Row_constraints = None
             callback = None
             U_samples = U[None]
-            extra_args = None
+            extra_args = (X,U)
     else:
         # Initialize the model with a nonnegative matrix factorization on the clipped values
         print('Initializing dose-response embeddings via NMF')
