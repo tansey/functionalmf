@@ -273,17 +273,26 @@ def factor_pav(W, V, in_place=False):
 # plt.savefig('plots/factor-pav.pdf', bbox_inches='tight')
 # plt.close()
 
-def tensor_nmf(Y, nembeds, max_steps=30, monotone=False, tol=1e-4, verbose=False, max_entry=None):
+def tensor_nmf(Y, nembeds, max_steps=30, monotone=False,
+                tol=1e-4, verbose=False, max_entry=None,
+                W=None, V=None, fit_W=True, fit_V=True,
+                row_features=None):
     '''Nonnegative matrix factorization for 3-tensors. Monotonicity in the
     third dimension is optionally enforced.'''
     from scipy.optimize import nnls
     from functionalmf.utils import factor_pav
-    W = np.random.gamma(1,1,size=(Y.shape[0], nembeds))
-    V = np.random.gamma(1,1,size=(Y.shape[1], Y.shape[2], nembeds))
+    if W is None:
+        W = np.random.gamma(1,1,size=(Y.shape[0], nembeds))
 
-    # Enforce lower triangular shape on W
-    if Y.shape[0] > 1:
-        W[np.triu_indices(nembeds, k=1)] = 0
+        # Enforce lower triangular shape on W
+        if Y.shape[0] > 1:
+            W[np.triu_indices(nembeds, k=1)] = 0
+
+    if V is None:
+        V = np.random.gamma(1,1,size=(Y.shape[1], Y.shape[2], nembeds))
+
+    if row_features is not None:
+        R = np.random.gamma(1,1,size=(row_features.shape[1], nembeds))
 
     # Assume we are dealing with replicates
     if len(Y.shape) == 3:
@@ -300,67 +309,102 @@ def tensor_nmf(Y, nembeds, max_steps=30, monotone=False, tol=1e-4, verbose=False
         prev_rmse = rmse
 
         # Fix V and fit W
-        V_mat = np.repeat(V.reshape((-1, V.shape[-1])), Y.shape[-1], axis=0)
-        for i in range(W.shape[0]):
-            if verbose:
-                print('\tRow {}/{}'.format(i+1, W.shape[0]))
-            # Get the vector of observations for this row
-            Y_vec = Y[i].flatten()
-
-            # Handle missing observations
-            missing = np.isnan(Y_vec)
-            A = V_mat[~missing]
-            b = Y_vec[~missing]
-
-            # Enforce lower triangular shape on W
-            ndims = min(W.shape[1], i+1)
-            A = A[:,:ndims]
-
-            W[i,:ndims] = nnls(A, b)[0].clip(1e-3, np.inf)
-
-            # Project down to within the constraints
-            if max_entry is not None and (W[i,None,None,:ndims] * V[...,:ndims]).sum(axis=-1).max() > max_entry:
-                from scipy.optimize import minimize
-                def fun(x):
-                    return 0.5*((b - x.dot(A.T))**2).sum()
-                cons = ({'type': 'ineq', 'fun': lambda x: max_entry - (x[None,None] * V[...,:ndims]).sum(axis=-1).flatten()},
-                        {'type': 'ineq', 'fun': lambda x: (x[None,None] * V[...,:ndims]).sum(axis=-1).flatten()},
-                        {'type': 'ineq', 'fun': lambda x: x - 1e-6})
-                res = minimize(fun, x0=W[i,:ndims], constraints=cons, method='SLSQP', options={'ftol':1e-8, 'maxiter':1000})
-                W[i,:ndims] = res.x
-
-        # Fix W and fit V
-        W_mat = np.repeat(W, Y.shape[-1], axis=0)
-        for j in range(V.shape[0]):
-            if verbose:
-                print('\tColumn {}/{}'.format(j+1, V.shape[0]))
-            for k in range(V.shape[1]):
+        if fit_W:
+            V_mat = np.repeat(V.reshape((-1, V.shape[-1])), Y.shape[-1], axis=0)
+            for i in range(W.shape[0]):
                 if verbose:
-                    print('\t\tAisle {}/{}'.format(k+1, V.shape[1]))
+                    print('\tRow {}/{}'.format(i+1, W.shape[0]))
                 # Get the vector of observations for this row
-                Y_vec = Y[:,j,k].flatten()
+                Y_vec = Y[i].flatten()
 
                 # Handle missing observations
                 missing = np.isnan(Y_vec)
-                A = W_mat[~missing]
+                A = V_mat[~missing]
                 b = Y_vec[~missing]
 
-                V[j,k] = nnls(A, b)[0].clip(1e-3, np.inf)
+                # Handle row features as side information
+                if row_features is not None:
+                    row_missing = np.isnan(row_features[i])
+                    A = np.concatenate([A, R[~row_missing]], axis=0)
+                    b = np.concatenate([b, row_features[i,~row_missing]])
+
+                # Enforce lower triangular shape on W
+                ndims = min(W.shape[1], i+1)
+                A = A[:,:ndims]
+
+                W[i,:ndims] = nnls(A, b)[0].clip(1e-3, np.inf)
 
                 # Project down to within the constraints
-                if max_entry is not None and (V[None,j,k] * W).sum(axis=-1).max() > max_entry:
+                if max_entry is not None and (W[i,None,None,:ndims] * V[...,:ndims]).sum(axis=-1).max() > max_entry:
+                    # Project to the monotone surface
+                    from scipy.optimize import minimize
+                    def fun(x):
+                        return 0.5*((b - x.dot(A.T))**2).sum()
+                    cons = ({'type': 'ineq', 'fun': lambda x: max_entry - (x[None,None] * V[...,:ndims]).sum(axis=-1).flatten()},
+                            {'type': 'ineq', 'fun': lambda x: (x[None,None] * V[...,:ndims]).sum(axis=-1).flatten()},
+                            {'type': 'ineq', 'fun': lambda x: x - 1e-6})
+                    res = minimize(fun, x0=W[i,:ndims], constraints=cons, method='SLSQP', options={'ftol':1e-8, 'maxiter':1000})
+                    W[i,:ndims] = res.x
+
+        # Fix W and fit V
+        if fit_V:
+            W_mat = np.repeat(W, Y.shape[-1], axis=0)
+            for j in range(V.shape[0]):
+                if verbose:
+                    print('\tColumn {}/{}'.format(j+1, V.shape[0]))
+                for k in range(V.shape[1]):
+                    if verbose:
+                        print('\t\tAisle {}/{}'.format(k+1, V.shape[1]))
+                    # Get the vector of observations for this row
+                    Y_vec = Y[:,j,k].flatten()
+
+                    # Handle missing observations
+                    missing = np.isnan(Y_vec)
+                    A = W_mat[~missing]
+                    b = Y_vec[~missing]
+
+                    V[j,k] = nnls(A, b)[0].clip(1e-3, np.inf)
+
+                    # Project down to within the constraints
+                    if max_entry is not None and (V[None,j,k] * W).sum(axis=-1).max() > max_entry:
+                        from scipy.optimize import minimize
+                        def fun(x):
+                            return 0.5*((b - x.dot(A.T))**2).sum()
+                        cons = ({'type': 'ineq', 'fun': lambda x: max_entry - x.dot(W.T)},
+                                {'type': 'ineq', 'fun': lambda x: x.dot(W.T)},
+                                {'type': 'ineq', 'fun': lambda x: x - 1e-6})
+                        res = minimize(fun, x0=V[j,k], constraints=cons, method='SLSQP', options={'ftol':1e-8, 'maxiter':1000})
+                        V[j,k] = res.x
+
+                # optionally project to monotone curve
+                if monotone:
+                    factor_pav(W, V[j], in_place=True)
+
+        # Fit the row feature embeddings
+        if row_features is not None:
+            for i in range(R.shape[0]):
+                if verbose:
+                    print('\tRow feature {}/{}'.format(i+1, R.shape[0]))
+
+                missing = np.isnan(row_features[:,i])
+                if np.all(missing):
+                    continue
+                A = W[~missing]
+                b = row_features[~missing,i]
+
+                R[i] = nnls(A, b)[0].clip(1e-3, np.inf)
+
+                # Project down to within the constraints
+                if max_entry is not None and W.dot(R[i:i+1].T).max() > max_entry:
+                    # Project to the monotone surface
                     from scipy.optimize import minimize
                     def fun(x):
                         return 0.5*((b - x.dot(A.T))**2).sum()
                     cons = ({'type': 'ineq', 'fun': lambda x: max_entry - x.dot(W.T)},
                             {'type': 'ineq', 'fun': lambda x: x.dot(W.T)},
                             {'type': 'ineq', 'fun': lambda x: x - 1e-6})
-                    res = minimize(fun, x0=V[j,k], constraints=cons, method='SLSQP', options={'ftol':1e-8, 'maxiter':1000})
-                    V[j,k] = res.x
-
-            # optionally project to monotone curve
-            if monotone:
-                factor_pav(W, V[j], in_place=True)
+                    res = minimize(fun, x0=R[i], constraints=cons, method='SLSQP', options={'ftol':1e-8, 'maxiter':1000})
+                    R[i] = res.x
 
         # delta = np.linalg.norm(np.concatenate([(prev_W - W).flatten(), (prev_V - V).flatten()]))
         rmse = np.sqrt(np.nansum((Y - (W[:,None,None]*V[None]).sum(axis=-1,keepdims=True))**2))
@@ -371,7 +415,9 @@ def tensor_nmf(Y, nembeds, max_steps=30, monotone=False, tol=1e-4, verbose=False
         if delta <= tol:
             break
 
-    return W, V
+    if row_features is None:
+        return W, V
+    return W, V, R
 
 
 def ep_from_mf(Y, W, V, mode='max', multiplier=2):
@@ -444,6 +490,144 @@ def pav(y):
             lvlsets[i, 0] = start
             lvlsets[i, 1] = last
     return v
+
+def logistic_regression_loss(X, y, lam, beta):
+    intercept = beta[-1] if len(beta) > X.shape[1] else 0
+    beta = beta[:-1] if len(beta) > X.shape[1] else beta
+    preds = ilogit(X.dot(beta) + intercept).clip(1e-6,1-1e-6)
+    return -(y*np.log(preds) + (1-y)*np.log(1-preds)).mean()  + lam*(beta**2).sum()
+
+def logistic_regression_grad(X, y, lam, beta):
+    grad = np.zeros(len(beta))
+    intercept = beta[-1] if len(beta) > X.shape[1] else 0
+    beta = beta[:-1] if len(beta) > X.shape[1] else beta
+    preds = ilogit(X.dot(beta) + intercept).clip(1e-6,1-1e-6)
+    grad[:X.shape[1]] = X.T.dot(preds - y) + lam*beta
+    if len(grad) > X.shape[1]:
+        grad[-1] = (preds - y).mean()
+    return grad
+
+def cross_entropy(Y, Mu, axis=None):
+    return np.nansum(Y * np.log(Mu) + (1-Y) * np.log(1-Mu), axis=axis)
+
+# Test script
+'''
+%pylab
+np.random.seed(42)
+from functionalmf.utils import binary_mf, ilogit
+W = np.random.normal(0,3/np.sqrt(10),size=(50,10))
+V = np.random.normal(0,3/np.sqrt(10),size=(30,10))
+X = (np.random.random(size=(50,30)) <= ilogit(W.dot(V.T))).astype(float)
+W_hat, V_hat = binary_mf(X, 5, verbose=1)
+
+Mu = ilogit(W.dot(V.T))
+Mu_hat = ilogit(W_hat.dot(V_hat.T))
+
+from functionalmf.factor import BinomialBayesianTensorFiltering as BBTF
+Y = X[...,None]
+btf = BBTF(Y.shape[0], Y.shape[1], Y.shape[2])
+results = btf.run_gibbs((Y,np.ones_like(Y)), nburn=10000, nsamples=100, nthin=100, print_freq=100, verbose=True, tf_order=0)
+Ws = results['W']
+Vs = results['V']
+Mu_btf = ilogit(np.einsum('znk,zmtk->znmt', Ws, Vs).mean(axis=0).clip(-10,10))[:,:,0]
+Mu[:5,:5]
+Mu_hat[:5,:5]
+Mu_btf[:5,:5]
+X[:5,:5]
+
+def logit_rmse(M1, M2):
+    L1 = np.log(M1 / (1-M1))
+    L2 = np.log(M2 / (1-M2))
+    return np.sqrt(np.mean((L1-L2)**2))
+
+Mu_emp = (X.mean(axis=0, keepdims=True) + X.mean(axis=1, keepdims=True))/2
+print('EMP: {}'.format(logit_rmse(Mu, Mu_emp)))
+print('MLE: {}'.format(logit_rmse(Mu, Mu_hat)))
+print('BTF: {}'.format(logit_rmse(Mu, Mu_btf)))
+'''
+
+
+def binary_mf(Y, nembeds=None, lam=None, lams=30, cv=5, max_steps=30, tol=1e-4, verbose=False):
+    from functools import partial
+    from scipy.optimize import fmin_l_bfgs_b
+    from sklearn.linear_model import LogisticRegression
+
+    # Convert to a log-space grid
+    if lam is None and isinstance(lams, int):
+        lams = np.exp(np.linspace(np.log(1e-2), np.log(1), lams))
+
+    # If there is no lambda provided, select it via CV
+    if lam is None:
+        from sklearn.model_selection import KFold
+        # Cross-validation setup
+        cv_scores = np.zeros((len(lams), cv))
+
+        indices = np.array([[i,j] for i,j in np.ndindex(Y.shape) if not np.isnan(Y[i,j])])
+
+        kf = KFold(n_splits=cv, shuffle=True)
+        for cv_idx, (train_index, test_index) in enumerate(kf.split(indices)):
+            if verbose:
+                print('Fold {}/{}'.format(cv_idx+1, cv))
+            W_prev, V_prev = None, None
+            for lam_idx, cur_lam in enumerate(lams):
+                # Get the training data
+                Y_train = np.copy(Y)
+                for i,j in indices[test_index]:
+                    Y_train[i,j] = np.nan
+
+                # Fit the model
+                W, V = binary_mf(Y_train, nembeds, lam=cur_lam, verbose=verbose>1)
+
+                # Evaluate on held out indices
+                Mu = ilogit(W.dot(V.T))
+                Y_test = np.array([Y[i,j] for i,j in indices[test_index]])
+                Mu_test = np.array([Mu[i,j] for i,j in indices[test_index]])
+                cv_scores[lam_idx, cv_idx] = cross_entropy(Y_test, Mu_test)
+
+                if verbose:
+                    print('\tLam {}/{} ({:.4f}) loss: {:.6f}'.format(lam_idx+1, len(lams), cur_lam, cv_scores[lam_idx, cv_idx]))
+
+                W_prev, V_prev = W, V
+
+        # Select the best lambda, fit, and return
+        best_lam = lams[np.argmax(cv_scores.mean(axis=1))]
+        if verbose:
+            print('Best lam: {:.6f}'.format(best_lam))
+        return binary_mf(Y, nembeds, lam=best_lam, verbose=verbose)
+
+    # Initialize the embeddings
+    W = np.random.normal(0, 1/np.sqrt(nembeds), size=(Y.shape[0], nembeds))
+    V = np.random.normal(0, 1/np.sqrt(nembeds), size=(Y.shape[1], nembeds))
+    
+    # Setup the LR optimizer
+    clf = LogisticRegression(C=lam, fit_intercept=False, solver='lbfgs')
+
+    # Measure the reconstruction loss
+    prev_loss = cross_entropy(Y, ilogit(W.dot(V.T)))
+    missing = np.isnan(Y)
+    for step in range(max_steps):
+        if verbose:
+            print('Step {}/{}'.format(step+1, max_steps))
+        # W-step
+        for i in range(Y.shape[0]):
+            clf.fit(V[~missing[i]], Y[i,~missing[i]])
+            W[i] = clf.coef_[0]
+
+        # V-step
+        for i in range(Y.shape[1]):
+            clf.fit(W[~missing[:,i]], Y[~missing[:,i],i])
+            V[i] = clf.coef_[0]
+
+        # Track progress and stop early if converged
+        loss = cross_entropy(Y, ilogit(W.dot(V.T)))
+        if verbose:
+            print('Loss: {:.6f}'.format(loss))
+        if loss - prev_loss < tol:
+            break
+        prev_loss = loss
+
+    return W, V
+
 
 
 

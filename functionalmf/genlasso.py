@@ -41,7 +41,7 @@ class _BayesianModel(object):
         self._inferred_variables(results)
         return results
 
-    def run_gibbs(self, data, nburn=1000, nthin=1, nsamples=1000, verbose=True, print_freq=100, **kwargs):
+    def run_gibbs(self, data, nburn=1000, nthin=1, nsamples=1000, verbose=True, print_freq=100, callback=None, **kwargs):
         '''Run a gibbs sampler on the model. TODO: multithreaded multichains'''
         nsteps = nburn + nthin*nsamples
         for step in range(nsteps):
@@ -49,6 +49,10 @@ class _BayesianModel(object):
                 print('\tStep {}'.format(step))
             # Gibbs step
             self.resample(data, **kwargs)
+
+            # If there is any callback function, notify it that there has been another gibbs iteration
+            if callback is not None:
+                callback(self, data, step, **kwargs)
 
             # Save posterior samples after burn-in
             if step >= nburn and (step-nburn) % nthin == 0:

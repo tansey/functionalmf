@@ -3,7 +3,7 @@ import numpy as np
 from empirical_bayes import estimate_likelihood
 from utils import load_data_as_pandas
 from functionalmf.factor import ConstrainedNonconjugateBayesianTensorFiltering
-from functionalmf.utils import tensor_nmf, ep_from_mf, factor_pav, mse
+from functionalmf.utils import tensor_nmf, ep_from_mf, factor_pav, mse, mae
 
 def init_model(Y, likelihood, args):
     # Linear constraints requiring monotonicity and [0,1] means.
@@ -14,8 +14,88 @@ def init_model(Y, likelihood, args):
     C_one = np.concatenate([np.eye(ndepth)*-1, np.full((ndepth,1),-1)], axis=1)
     C = np.concatenate([C_zero, C_one, C_mono], axis=0)
 
-    # Initialize the model with a nonnegative matrix factorization on the clipped values
-    W, V = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999, verbose=True)
+    # If the user provided an optional set of binary row features
+    if args.features is not None:
+        import pandas as pd
+
+        print('Loading features')
+        df = pd.read_csv(args.features, index_col=0, header=0)
+
+        # Filter the features into those with and without dose-response data
+        cells = np.load(os.path.join(args.outdir, 'cells.npy'))
+        
+        # Print some info on the breakdown of features and dose-response data
+        have_both = [c for c in cells if c in df.index]
+        doseresponse_only = [c for c in cells if c not in df.index]
+        features_only = [c for c in df.index if c not in cells]
+        print('Have dose-response and features: {}'.format(len(have_both)))
+        print('Dose-response only: {}'.format(len(doseresponse_only)))
+        print('Features only: {}'.format(len(features_only)))
+
+        # Create feature matrices for samples with and without dose-response curves
+        X_with = np.array([df.loc[c].values if c in df.index else np.full(len(df.columns), np.nan) for c in cells])
+        X_without = np.array([df.loc[c].values for c in features_only])
+
+        print('Initializing dose-response embeddings via NMF with row features')
+        W, V, U = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999, verbose=False, row_features=X_with)
+
+        # If we have samples that have no dose-response, generate factors for them as well
+        # TODO: fitting this jointly is probably marginally better, but let's not do it for now.
+        # if X_without.shape[0] > 0:
+        #     W_without, _ = tensor_nmf(X_without[:,:,None], args.nembeds, V=U, fit_V=False, max_entry=0.999, verbose=False)
+        X = X_with # Quick and dirty approach that just uses the samples with dose-response for now
+
+        if args.sample_features:
+            # Create constraints for WU to be in [0,1]
+            Row_zero = np.concatenate([U,np.full((U.shape[0],1), 0)], axis=1)
+            Row_one = np.concatenate([U*-1,np.full((U.shape[0],1), -1)], axis=1)
+            Row_constraints = np.concatenate([Row_zero, Row_one], axis=0)
+
+            # Posterior samples
+            U_samples = np.zeros((args.nsamples, U.shape[0], U.shape[1]))
+
+            from functionalmf.gass import gass
+            def U_step(model, Y_obs, step):
+                # Setup the [0,1] constraints
+                U_zero = np.concatenate([model.W,np.full((model.W.shape[0],1), 0)], axis=1)
+                U_one = np.concatenate([model.W*-1,np.full((model.W.shape[0],1), -1)], axis=1)
+                U_constraints = np.concatenate([U_zero, U_one], axis=0)
+
+                U_Sigma = np.eye(U.shape[1])
+
+                # Sample each U_i vector
+                for i in range(U.shape[0]):
+                    def u_loglike(u, xx):
+                        if len(u.shape) == 2:
+                            wu = u.dot(model.W.T)
+                            return np.nansum(X[None,:,i]*np.log(wu) + (1-X[None,:,i])*np.log(1-wu), axis=1)
+                        wu = model.W.dot(u)
+                        return np.nansum(X[:,i]*np.log(wu) + (1-X[:,i])*np.log(1-wu))
+                    U[i], _ = gass(U[i], U_Sigma, u_loglike, U_constraints)
+                    
+
+                # Update W constraints for WU to be in [0,1]
+                Row_zero = np.concatenate([U,np.full((U.shape[0],1), 0)], axis=1)
+                Row_one = np.concatenate([U*-1,np.full((U.shape[0],1), -1)], axis=1)
+                Row_constraints = np.concatenate([Row_zero, Row_one], axis=0)
+                model.Row_constraints = Row_constraints
+
+                # Save the U sample
+                if step >= args.nburn and (step-args.nburn) % args.nthin == 0:
+                    sidx = (step - args.nburn) // args.nthin
+                    U_samples[sidx] = U
+
+            callback = U_step
+        else:
+            Row_constraints = None
+            callback = None
+    else:
+        # Initialize the model with a nonnegative matrix factorization on the clipped values
+        print('Initializing dose-response embeddings via NMF')
+        W, V = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999, verbose=False)
+        U = None
+        Row_constraints = None
+        callback = None
     
     # Sanity check that we're starting at valid points
     Mu = (W[:,None,None] * V[None]).sum(axis=-1)
@@ -25,7 +105,8 @@ def init_model(Y, likelihood, args):
     # Get an EP approximation centered at the mean and with the variance overestimated.
     EP_approx = ep_from_mf(Y, W, V, mode='multiplier', multiplier=3)
 
-    def rowcol_likelihood(Y_obs, WV, row=None, col=None):
+
+    def rowcol_likelihood(Y_obs, WV, W, V, row=None, col=None):
         if row is not None:
             Y_obs = Y_obs[row]
         if col is not None:
@@ -34,7 +115,11 @@ def init_model(Y, likelihood, args):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             z = np.nansum(likelihood.logpdf(Y_obs, WV[...,None]))
+            if row is not None and args.sample_features:
+                WU = W.dot(U[:,:W.shape[-1]].T)
+                z += np.nansum(X[row]*np.log(WU) + (1-X[row])*np.log(1-WU), axis=-1)
         return z
+
 
 
     # Create the model
@@ -45,11 +130,14 @@ def init_model(Y, likelihood, args):
                                                           tf_order=args.tf_order,
                                                           lam2_true=args.lam2,
                                                           ep_approx=EP_approx,
-                                                          nthreads=args.nthreads)
+                                                          nthreads=args.nthreads,
+                                                          W_true=W if args.features is not None and not args.sample_features else None, # Do not sample W if we have features
+                                                          Row_constraints=Row_constraints, # Row feature constraints to [0,1]
+                                                          )
     # Initialize at the NMF fit
     model.W, model.V = W, V
 
-    return model
+    return model, U_samples, callback
 
 if __name__ == '__main__':
     import os
@@ -82,6 +170,10 @@ if __name__ == '__main__':
 
     # Evaluation settings
     parser.add_argument('--nholdout', type=int, default=0, help='Number of curves to hold out for test evaluation.')
+
+    # Side-information (row features)
+    parser.add_argument('--features', help='An optional matrix of binary features for each row.')
+    parser.add_argument('--sample_features', action='store_true', help='If specified, samples feature embeddings jointly with dose-response embeddings; otherwise, features are fixed at monotone NMF embedding values.')
     
     # Get the arguments from the command line
     args = parser.parse_args()
@@ -97,6 +189,9 @@ if __name__ == '__main__':
     print('Loading data and performing empirical Bayes likelihood estimate')
     Y, likelihood, cells, drugs, concentrations, control_obs = estimate_likelihood(df, nbins=args.nbins, tensor_outcomes=True, plot=args.plot)
 
+    if not os.path.exists(args.outdir):
+        os.makedirs(args.outdir)
+
     np.save(os.path.join(args.outdir, 'cells'), cells)
     np.save(os.path.join(args.outdir, 'drugs'), drugs)
 
@@ -108,6 +203,7 @@ if __name__ == '__main__':
     X = np.arange(ndepth)
 
     # Hold out a subset of entries for validation
+    Y_full = Y
     if args.nholdout > 0:
         print('Holding out {} random curves'.format(args.nholdout))
         options = [idx for idx in np.ndindex(Y.shape[:-2]) if not np.all(np.isnan(Y[idx]))]
@@ -125,13 +221,13 @@ if __name__ == '__main__':
         
         # Remove the held out data points but keep track of them for evaluation at the end
         held_out = selected.T
-        Y_full = Y
         Y = Y_candidate
         print(held_out)
 
+
     # Get the raw NMF as a baseline
     print('Fitting NMF')
-    W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999, verbose=True)
+    W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999, verbose=False)
     Mu_nmf = (W_nmf[:,None,None] * V_nmf[None]).sum(axis=-1)
     np.save(os.path.join(args.outdir, 'nmf_w'), W_nmf)
     np.save(os.path.join(args.outdir, 'nmf_v'), V_nmf)
@@ -143,7 +239,7 @@ if __name__ == '__main__':
 
 
     print('Initializing model')
-    model = init_model(Y, likelihood, args)
+    model, Us, callback = init_model(Y, likelihood, args)
     Mu_init = (model.W[:,None,None]*model.V[None]).sum(axis=-1)
 
     # # Plot the initial data
@@ -171,7 +267,8 @@ if __name__ == '__main__':
     results = model.run_gibbs(Y, nburn=args.nburn,
                                  nthin=args.nthin,
                                  nsamples=args.nsamples,
-                                 print_freq=1)
+                                 print_freq=1,
+                                 callback=callback)
 
     Ws = results['W']
     Vs = results['V']
@@ -181,6 +278,11 @@ if __name__ == '__main__':
     Mu_hat_mean = Mu_hat.mean(axis=0)
     Mu_hat_upper = np.percentile(Mu_hat, 95, axis=0)
     Mu_hat_lower = np.percentile(Mu_hat, 5, axis=0)
+    Y_hat = np.array([likelihood.sample(Mu_hat[None], size=[100]+list(Mu_hat.shape))]).reshape((-1,nrows,ncols,ndepth))
+    Y_hat_upper = np.percentile(Y_hat, 95, axis=0)
+    Y_hat_lower = np.percentile(Y_hat, 5, axis=0)
+
+    # TODO -- calculate posterior predictive intervals
 
     # Project the posteriors to monotone curves via PAV
     projected_embeddings = [(W_i, [factor_pav(W_i, V_ij) for V_ij in V_i]) for W_i, V_i in zip(Ws, Vs)]
@@ -194,6 +296,14 @@ if __name__ == '__main__':
     Mu_hat_proj_lower = np.percentile(Mu_hat_proj, 5, axis=0)
 
     
+    print('MAE on in-sample observations:')
+    print('NMF:                     {}'.format(mae(Mu_nmf[...,None], Y)))
+    print('Monotone NMF:            {}'.format(mae(Mu_nmf_proj[...,None], Y)))
+    print('Posterior mean:          {}'.format(mae(Mu_hat_mean[...,None], Y)))
+    # print('Monotone posterior mean: {}'.format(np.sqrt(mse(Mu_hat_proj_mean[...,None], Y))))
+    print()
+
+
     print('RMSE on in-sample observations:')
     print('NMF:                     {}'.format(np.sqrt(mse(Mu_nmf[...,None], Y))))
     print('Monotone NMF:            {}'.format(np.sqrt(mse(Mu_nmf_proj[...,None], Y))))
@@ -211,6 +321,13 @@ if __name__ == '__main__':
     print()
     
     if args.nholdout > 0:
+        print('MAE on held out observations:')
+        print('NMF:                     {}'.format(mae(Mu_nmf[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
+        print('Monotone NMF:            {}'.format(mae(Mu_nmf_proj[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
+        print('Posterior mean:          {}'.format(mae(Mu_hat_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]])))
+        # print('Monotone posterior mean: {}'.format(np.sqrt(mse(Mu_hat_proj_mean[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
+        print()
+
         print('RMSE on held out observations:')
         print('NMF:                     {}'.format(np.sqrt(mse(Mu_nmf[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
         print('Monotone NMF:            {}'.format(np.sqrt(mse(Mu_nmf_proj[held_out[0], held_out[1],:,None], Y_full[held_out[0], held_out[1]]))))
@@ -238,6 +355,8 @@ if __name__ == '__main__':
     np.save(os.path.join(args.outdir, 'btf_v'), Vs)
     np.save(os.path.join(args.outdir, 'btf_mono'), Mu_hat_proj)
     np.save(os.path.join(args.outdir, 'btf_ep_sigma'), model.Sigma_ep)
+    if Us is not None:
+        np.save(os.path.join(args.outdir, 'btf_u'), Us)
     if args.nholdout > 0:
         np.save(os.path.join(args.outdir, 'held_out'), held_out)
     print()
@@ -249,25 +368,32 @@ if __name__ == '__main__':
             os.makedirs(args.plotdir)
         if args.big_plot:
             fig, axarr = plt.subplots(nrows, ncols, figsize=(5*ncols,5*nrows), sharex=True, sharey=True)
+        else:
+            plt.figure()
         for i in range(nrows):
             print('Row {}/{}'.format(i+1,nrows))
             for j in range(ncols):
                 if args.big_plot:
                     ax = axarr[i,j]
                 else:
-                    ax = plt
+                    ax = plt.gca()
                 ax.axhline(1, color='darkgray', alpha=0.5)
                 ax.plot(X, Mu_init[i,j], color='blue', label='NMF')
                 if model.Mu_ep is not None:
                     ax.errorbar(X, model.Mu_ep[i,j], yerr=model.Sigma_ep[i,j], alpha=0.5)
                 if len(Y.shape) > 3:
                     for k in range(ndepth):
-                        ax.scatter(np.full(Y.shape[-1],X[k]), Y[i,j,k], color='gray')
+                        ax.scatter(np.full(Y.shape[-1],X[k]), Y[i,j,k], color='black')
                 else:
-                    ax.scatter(X, Y[i,j], color='gray')
-                plt.ylim([0, np.nanmax(Y)+0.01])
+                    ax.scatter(X, Y[i,j], color='black')
+                ax.set_ylim([0, np.nanmax(Y)+0.01])
+                ax.set_xlim([X[0]-0.5,X[-1]+0.5])
                 ax.plot(X, Mu_hat_mean[i,j], color='orange')
-                ax.fill_between(X, Mu_hat_lower[i,j], Mu_hat_upper[i,j], color='orange', alpha=0.5)
+                ax.fill_between(X, Mu_hat_lower[i,j], Mu_hat_upper[i,j], color='orange', alpha=0.6)
+                ax.fill_between(X, Y_hat_lower[i,j], Y_hat_upper[i,j], color='orange', alpha=0.3)
+                if args.nholdout > 0:
+                    if np.any((held_out[0] == i) & (held_out[1] == j)):
+                        ax.axvspan(X[0]-0.5, X[-1]+0.5, color='gray', alpha=0.3)
                 if not args.big_plot:
                     plt.savefig(os.path.join(args.plotdir, 'sample{}-drug{}.pdf'.format(i,j)), bbox_inches='tight')
                     plt.close()

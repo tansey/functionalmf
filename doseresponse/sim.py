@@ -20,6 +20,9 @@ if __name__ == '__main__':
     parser.add_argument('--m', type=int, default=11, help='Number of simulated drugs.')
     parser.add_argument('--t', type=int, default=9, help='Number of simulated concentration levels.')
     parser.add_argument('--r', type=int, default=6, help='Number of replicates per (n,m,t).')
+    parser.add_argument('--p', type=int, default=20, help='Number of binary cell line features.')
+    parser.add_argument('--n_missing', type=int, default=2, help='Number of simulated cell lines with no response data.')
+    parser.add_argument('--p_missing', type=int, default=2, help='Number of simulated cell lines with no features.')
     parser.add_argument('--seed', type=int, default=42, help='The pseudo-random number generator seed.')
     
     # Get the arguments from the command line
@@ -33,6 +36,9 @@ if __name__ == '__main__':
 
     # Draw the drug embeddings
     V = np.cumsum((np.random.random(size=(args.m, args.t, 1)) <= np.linspace(0.05, 0.5, args.t)[None,:,None]) * np.random.gamma(1,0.15,size=(args.m, args.t, args.k)), axis=1)
+
+    # Draw the feature embeddings
+    U = np.random.normal(0,1/np.sqrt(args.k),size=(args.p, args.k))
 
     # Calculate the ground truth effect tensor
     effects = ilogit(-(W[:,None,None] * V[None,:,:]).sum(axis=-1) + 3)
@@ -50,16 +56,33 @@ if __name__ == '__main__':
     # Imaginary concentration levels to match the real experiments
     concentrations = np.concatenate([[-10], np.linspace(-9.12, -5.3, args.t)])
 
+    # Binary features for each cell line
+    features = (np.random.random(size=(args.n, args.p)) <= ilogit(W.dot(U.T))).astype(int)
+
+    # Drop features from the first p_missing rows
+    features = features[args.p_missing:]
+
+    # Drop dose-response from the last n_missing rows
+    obs = obs[:-args.n_missing]
+
+    if not os.path.exists('doseresponse/data/sim'):
+        os.makedirs('doseresponse/data/sim')
+    if not os.path.exists('doseresponse/plots/sim'):
+        os.makedirs('doseresponse/plots/sim')
+
     # Save the results
     np.save('doseresponse/data/sim/obs', obs)
     np.save('doseresponse/data/sim/truth', effects)
     np.save('doseresponse/data/sim/w', W)
     np.save('doseresponse/data/sim/v', V)
+    np.save('doseresponse/data/sim/u', U)
+    pd.DataFrame(features, index=['Tumor{}'.format(i) for i in range(args.p_missing, args.n)],
+                           columns=['Feature{}'.format(i) for i in range(features.shape[1])]).to_csv('doseresponse/data/sim/features.csv')
     import csv
     with open('doseresponse/data/sim/data.csv', 'w') as f:
         writer = csv.writer(f)
         writer.writerow(['cell line','drug','concentration','outcome'])
-        for i in range(args.n):
+        for i in range(args.n-args.n_missing):
             for j in range(args.m):
                 for t in range(args.t+1):
                     for r in range(args.r):
@@ -67,6 +90,7 @@ if __name__ == '__main__':
                                          'Drug{}'.format(j),
                                          '' if t == 0 else '{:.2f}'.format(concentrations[t]),
                                          obs[i,j,t,r]])
+
 
     print('Reloading data and performing empirical Bayes likelihood estimate')
     from utils import load_data_as_pandas
@@ -83,9 +107,10 @@ if __name__ == '__main__':
             ax = axarr[j // 4, j % 4]
             ax.plot(concentrations, [1] + list(effects[i,j]), label='True effects', color='black')
             ax.axhline(1, color='red', ls='--', lw=3, label='Control mean')
-            ax.scatter(flatten([[c]*args.r for c in concentrations[1:]]), Y[i,j].flatten(), label='Observations', color='gray')
+            if i < (args.n - args.n_missing):
+                ax.scatter(flatten([[c]*args.r for c in concentrations[1:]]), Y[i,j].flatten(), label='Observations', color='gray')
             ax.set_title('Drug {}'.format(j))
-            ax.set_ylim([0, Y.max()+1e-4])
+            ax.set_ylim([0, np.nanmax(Y)+1e-4])
             if j == 0:
                 ax.legend(loc='upper right')
         plt.tight_layout()

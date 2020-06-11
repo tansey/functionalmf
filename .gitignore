@@ -67,6 +67,13 @@ data/
 doseresponse/data/
 doseresponse/plots/
 *__pycache__/
+flutrends/flu-states/
+flutrends/plots/
+flutrends/flu_US_states.mat
+flutrends/flu_US_states_train.mat
+copynumber/
+crime/
+politics/plots/
 
 
 

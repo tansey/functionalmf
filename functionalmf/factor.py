@@ -5,13 +5,14 @@ import warnings
 from pypolyagamma import PyPolyaGamma
 from scipy.sparse import kron, eye, spdiags, csc_matrix, block_diag, diags
 from scipy.stats import norm, multivariate_normal as mvn, gamma
+from scipy.special import gammaln
 from scipy.linalg import solve_triangular
 from sksparse.cholmod import cholesky
 from functionalmf.genlasso import _BayesianModel, \
                                  ConjugateInverseGammaPrior
 from functionalmf.utils import bayes_delta, bayes_grid_penalty,\
                               moving_average,\
-                              sample_horseshoe_plus, sample_horseshoe
+                              sample_horseshoe_plus, sample_horseshoe, ilogit
 from functionalmf.fast_mvn import sample_mvn_from_precision
 from functionalmf.elliptical_slice import elliptical_slice, elliptical_slice_
 from functionalmf.gass import gass
@@ -409,6 +410,7 @@ class BinomialBayesianTensorFiltering(GaussianBayesianTensorFiltering):
         # Initialize the Polya-Gamma sampler
         self.pg = PyPolyaGamma(seed=pg_seed)
         self.nu2 = np.zeros((nrows, ncols, ndepth))
+        self.nu2_flat = np.zeros(np.prod(self.nu2.shape))
         self.sample_nu2 = True
 
     def _resample_W(self, data):
@@ -426,11 +428,119 @@ class BinomialBayesianTensorFiltering(GaussianBayesianTensorFiltering):
         gaussian sampler steps.'''
         Y, N = data
         Mu = np.einsum('nk,mtk->nmt', self.W, self.V)
-        missing = np.isnan(Y)
-        for s in np.ndindex(Y.shape):
-            if missing[s]:
-                continue
-            self.nu2[s] = 1/self.pg.pgdraw(N[s], Mu[s])
+        # missing = np.isnan(Y)
+        # for s in np.ndindex(Y.shape):
+        #     if missing[s]:
+        #         continue
+        #     self.nu2[s] = 1/self.pg.pgdraw(N[s], Mu[s])
+        # print(N.flatten()[:5], Mu.flatten()[:5], self.nu2_flat[:5])
+        with np.errstate(divide='ignore'):
+            self.pg.pgdrawv(N.flatten(), Mu.flatten(), self.nu2.reshape(-1))
+            self.nu2 = 1/self.nu2
+
+
+class NegativeBinomialBayesianTensorFiltering(BinomialBayesianTensorFiltering):
+    def __init__(self, nrows, ncols, ndepth,
+                    R_true=None, # Treat R as an unknown random variable that must be sampled
+                    R_init=None, # Initial value of R, if R_true is None
+                    nmetropolis=30, # Random-walk metropolis hastings steps per Gibbs step for rate parameter
+                    rpropstdev=0.1, # proposal standard deviation in RW-MH algorithm
+                    rstdev=1, # Prior standard deviation on log(R), defaults to 1 (in log space)
+                    rdims=(0,1,2), # Dims for which to aggregate rate parameters along; default is all 3
+                        **kwargs):
+        super().__init__(nrows, ncols, ndepth, **kwargs)
+        # self.R = np.random.([(1 if i in rdims else c) for i,c in enumerate([nrows, ncols, ndepth])])
+        # self.N = np.ones((nrows, ncols, ndepth))
+
+        # MCMC-within-Gibbs parameters for updating R
+        if R_true is not None:
+            self.sample_R = False
+            self.R = R_true
+        else:
+            self.sample_R = True
+            self.nmetropolis = nmetropolis
+            self.rpropstdev = rpropstdev
+            self.rstdev = rstdev
+            # Dims to aggregate over
+            self.rdims = [3] + (sorted([d for d in rdims])[::-1] if rdims is not None else [])
+            if R_init is None:
+                self._init_R()
+            else:
+                self.R = R_init
+
+    
+
+    def resample(self, data):
+        # If no replicate, treat this as 1 replicate
+        if len(data.shape) == 3:
+            data = data[...,None]
+
+        # Track the missing values so we don't put false zeros in
+        missing = np.all(np.isnan(data), axis=-1)
+
+        # Sample the NB rate parameter
+        if self.sample_R:
+            self._resample_R(data)
+
+        # Binomial update step-- can sum the independent trials and successes
+        Y = np.nansum(data, axis=-1)
+        Y[missing] = np.nan
+
+        # Run the Binomial sampler steps
+        super().resample((Y,self.N))
+
+    def _resample_R(self, data):
+        '''Random-walk MCMC for R'''
+        self.R = self.R[...,None]
+        logR = np.log(self.R)
+
+        # Current success probability
+        P = ilogit(np.einsum('nk,mtk->nmt', self.W, self.V).clip(-10,10))[...,None]
+
+        # Run a fixed number of random walk Metropolis-Hastings steps
+        for mcmc_step in range(self.nmetropolis):
+            # Sample a candidate R values
+            candidate_logR = logR + np.random.normal(0, self.rpropstdev, size=logR.shape)
+            candidate_R = np.exp(candidate_logR)
+
+            # Get the prior log-likelihood ratio
+            accept_prior = norm.logpdf(candidate_logR, loc=0, scale=self.rstdev) - norm.logpdf(logR, loc=0, scale=self.rstdev)
+
+            # Get the likelihood log-likelihood ratio
+            accept_likelihood = (gammaln(data+candidate_R) - gammaln(candidate_R) - gammaln(data+self.R) + gammaln(self.R) # combinatorial bit
+                                 + (candidate_R-self.R)*np.log(1-P)) # failure prob bit; success prob bit does not use R
+            
+            # Multiply replicates and any other aggregated likelihoods
+            for dim in self.rdims:
+                accept_likelihood = np.nansum(accept_likelihood, axis=dim)
+
+            # Get rid of aggregated prior dims; make sure to go back to 1 for any size-1 unaggregated dims
+            accept_prior = np.squeeze(accept_prior).reshape(accept_likelihood.shape)
+
+            # Get the acceptance probability for each R
+            accept_probs = np.exp(np.clip(accept_prior + accept_likelihood, -10, 1)).reshape(self.R.shape)
+
+            # Accept/reject the samples
+            accept_indices = np.random.random(size=accept_probs.shape) <= accept_probs
+
+            accept_indices = accept_indices & (candidate_R > 1) # TEMP
+            accepted_logR = candidate_logR[accept_indices]
+            logR[accept_indices] = accepted_logR
+            self.R[accept_indices] = np.exp(accepted_logR)
+
+        # Update the pseudo-counts for the PG-augmentation step
+        self.N = np.nansum(data + self.R, axis=-1) # Binomial N can sum independent trials
+        self.R = self.R[...,0]
+
+    def _inferred_variables(self, var_map):
+        super()._inferred_variables(var_map)
+        var_map['R'] = self.R
+
+    def _init_R(self):
+        R_size = [(1 if i in self.rdims else c) for i,c in enumerate([self.nrows, self.ncols, self.ndepth])]
+        self.R = np.exp(np.random.normal(0, self.rstdev, size=R_size))
+        self.R += 1 # TEMP
+        
 
 
 class NonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
@@ -488,6 +598,9 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                  Constraints, # J x T matrix of J contraints for every Tau_{ij} T-vector
                  ep_approx=None, # optional EP approximation for centering
                  nthreads=3, # Number of parallel worker processes to use (technically not threads right now)
+                 gass_ngrid=100, # Number of discrete points to approximate the valid ellipse regions
+                 Row_constraints=None, # Optional extra matrix of permanant row constraint vectors
+                 Col_constraints=None, # Optional extra matrix of permanent column constraint vectors
                  **kwargs):
         super().__init__(nrows, ncols, ndepth, **kwargs)
         self.loglikelihood = loglikelihood
@@ -496,6 +609,12 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         self.Constraints_A, self.Constraints_C = Constraints[:,:-1], Constraints[:,-1:]
         self.nconstraints = self.Constraints_A.shape[0]
         self.nthreads = nthreads
+        self.gass_ngrid = gass_ngrid
+
+        # Row and column constraints that remain fixed, as opposed to the
+        # Constraints which are based on the opposite embedding
+        self.Row_constraints = Row_constraints
+        self.Col_constraints = Col_constraints
 
         # If we were provided with a gaussian approximation, use that to
         # center the proposal
@@ -540,8 +659,11 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         try:
             W_updated, _ = gass(W_i, Q_i, self._w_loglikelihood, Constraints[i],
                              mu=mu_i,
-                             ll_args=(i, data, V_i, Mu_ep_i, Sigma_ep_i), precision=True)
+                             ll_args=(i, data, V_i, Mu_ep_i, Sigma_ep_i),
+                             precision=True,
+                             ngrid=self.gass_ngrid)
         except:
+            np.set_printoptions(suppress=True, precision=2)
             print(i)
             print('W:')
             print(self.W)
@@ -551,6 +673,10 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             print()
             print('Constraints A:')
             print(self.Constraints_A)
+            if self.Row_constraints is not None:
+                print('Row constraints and evaluation:')
+                Row_constraints_and_eval = np.concatenate([self.Row_constraints, self.Row_constraints[:,:-1].dot(self.W[i])[:,None]], axis=1)
+                print(np.concatenate([Row_constraints_and_eval, (Row_constraints_and_eval[:,-1] >= Row_constraints_and_eval[:,-2])[:,None]],axis=1))
             print('Constraints W[{}]:'.format(i))
             print(Constraints[i])
             print()
@@ -609,7 +735,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                              self._v_loglikelihood,
                              Constraints, 
                              ll_args=V_args,
-                             mu=mu, sparse=True, precision=True,
+                             mu=mu, sparse=True, precision=True, ngrid=self.gass_ngrid,
                              chol_factor=True, Q_shape=Q.shape, verbose=False)[0].reshape((self.nembeds, self.ndepth)).T
         except:
             print('Bad cholesky!')
@@ -662,6 +788,11 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                 C = np.tile(self.Constraints_C, (self.ncols, 1))
                 A = A.reshape((-1, ndims))
                 Constraints_i = np.concatenate([A, C], axis=1)
+
+                # Add any fixed constraints
+                if self.Row_constraints is not None:
+                    Row_constraints_i = np.concatenate([self.Row_constraints[:,:ndims], self.Row_constraints[:,-1:]], axis=1)
+                    Constraints_i = np.concatenate([Constraints_i, Row_constraints_i], axis=0)
             Constraints_W.append(Constraints_i)
         return Constraints_W
 
@@ -671,7 +802,11 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         # D<w_i,v_j{1,...,t}> = <v_j., Dw_i> > c
         A = (self.Constraints_A[None,:,None,:] * self.W[:,None,:,None]).reshape((self.nrows*self.nconstraints, self.nembeds*self.ndepth))
         C = np.tile(self.Constraints_C, (self.nrows, 1))
-        return np.concatenate([A,C], axis=1)
+        V_constraints = np.concatenate([A,C], axis=1)
+        if self.Col_constraints is not None:
+            # TODO: enable constraints on the column embeddings
+            raise NotImplementedError
+        return V_constraints
 
     def _w_loglikelihood(self, w_i, ll_args):
         idx, data, V_i, mu_ep, sigma_ep = ll_args
@@ -685,7 +820,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             # Get the black box log-likelihood
             # We could require that it supports batching, but this is cleaner,
             # albeit a little slower since it's not vectorized.
-            ll = np.array([self.loglikelihood(data, tau_i, row=idx) for tau_i in tau])
+            ll = np.array([self.loglikelihood(data, tau_i, w_ik, V_i, row=idx) for tau_i, w_ik in zip(tau, w_i)])
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -697,7 +832,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             tau = (V_i * w_i[None,None]).sum(axis=-1)
 
             # Get the black box log-likelihood
-            ll = self.loglikelihood(data, tau, row=idx)
+            ll = self.loglikelihood(data, tau, w_i, V_i, row=idx)
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -729,7 +864,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             # Get the black box log-likelihood
             # We could require that it supports batching, but this is cleaner,
             # albeit a little slower since it's not vectorized.
-            ll = np.array([self.loglikelihood(data, tau_i, col=idx) for tau_i in tau])
+            ll = np.array([self.loglikelihood(data, tau_i, self.W, V_jk, col=idx) for tau_i, V_jk in zip(tau, V_j)])
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -755,7 +890,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             #     print(tau)
 
             # Get the black box log-likelihood
-            ll = self.loglikelihood(data, tau, col=idx)
+            ll = self.loglikelihood(data, tau, self.W, V_j, col=idx)
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -772,7 +907,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def logprob(self, data, **kwargs):
         # Calculate the mean effects for each V_j in the batch
         tau = (self.W[:,None,None] * self.V[None]).sum(axis=-1)
-        return self.loglikelihood(data, tau)
+        return self.loglikelihood(data, tau, self.W, self.V)
     
 
 
