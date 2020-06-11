@@ -176,8 +176,13 @@ if __name__ == '__main__':
     parser.add_argument('--features', help='An optional matrix of binary features for each row.')
     parser.add_argument('--sample_features', action='store_true', help='If specified, samples feature embeddings jointly with dose-response embeddings; otherwise, features are fixed at monotone NMF embedding values.')
     
+    parser.add_argument('--aws', action='store_true', help='Specify this if running on EC2.')
+
     # Get the arguments from the command line
     args = parser.parse_args()
+
+    if args.aws:
+        os.environ['OMP_NUM_THREADS'] = '1'
 
     # Seed the random number generator so we get reproducible results
     np.random.seed(args.seed)
