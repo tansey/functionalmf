@@ -5,6 +5,22 @@ from utils import load_data_as_pandas
 from functionalmf.factor import ConstrainedNonconjugateBayesianTensorFiltering
 from functionalmf.utils import tensor_nmf, ep_from_mf, factor_pav, mse, mae
 
+
+def rowcol_likelihood(Y_obs, WV, W, V, U, row=None, col=None):
+    if row is not None:
+        Y_obs = Y_obs[row]
+    if col is not None:
+        Y_obs = Y_obs[:,col]
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        z = np.nansum(likelihood.logpdf(Y_obs, WV[...,None]))
+        if row is not None and U is not None:
+            WU = W.dot(U[:,:W.shape[-1]].T)
+            z += np.nansum(X[row]*np.log(WU) + (1-X[row])*np.log(1-WU), axis=-1)
+    return z
+
+
 def init_model(Y, likelihood, args):
     # Linear constraints requiring monotonicity and [0,1] means.
     # Note that we use a softened monotonicity constraint allowing a small
@@ -86,10 +102,12 @@ def init_model(Y, likelihood, args):
                     U_samples[sidx] = U
 
             callback = U_step
+            extra_args = U
         else:
             Row_constraints = None
             callback = None
             U_samples = U[None]
+            extra_args = None
     else:
         # Initialize the model with a nonnegative matrix factorization on the clipped values
         print('Initializing dose-response embeddings via NMF')
@@ -97,6 +115,7 @@ def init_model(Y, likelihood, args):
         Row_constraints = None
         callback = None
         U_samples = None
+        extra_args = None
     
     # Sanity check that we're starting at valid points
     Mu = (W[:,None,None] * V[None]).sum(axis=-1)
@@ -105,22 +124,6 @@ def init_model(Y, likelihood, args):
 
     # Get an EP approximation centered at the mean and with the variance overestimated.
     EP_approx = ep_from_mf(Y, W, V, mode='multiplier', multiplier=3)
-
-
-    def rowcol_likelihood(Y_obs, WV, W, V, row=None, col=None):
-        if row is not None:
-            Y_obs = Y_obs[row]
-        if col is not None:
-            Y_obs = Y_obs[:,col]
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            z = np.nansum(likelihood.logpdf(Y_obs, WV[...,None]))
-            if row is not None and args.sample_features:
-                WU = W.dot(U[:,:W.shape[-1]].T)
-                z += np.nansum(X[row]*np.log(WU) + (1-X[row])*np.log(1-WU), axis=-1)
-        return z
-
 
 
     # Create the model
@@ -134,6 +137,8 @@ def init_model(Y, likelihood, args):
                                                           nthreads=args.nthreads,
                                                           W_true=W if args.features is not None and not args.sample_features else None, # Do not sample W if we have features
                                                           Row_constraints=Row_constraints, # Row feature constraints to [0,1]
+                                                          rowcol_args=extra_args, # Extra args to be passed to the 
+                                                          multiprocessing=args.multiprocessing, # Use nthreads processes instead of threads
                                                           )
     # Initialize at the NMF fit
     model.W, model.V = W, V
@@ -176,13 +181,10 @@ if __name__ == '__main__':
     parser.add_argument('--features', help='An optional matrix of binary features for each row.')
     parser.add_argument('--sample_features', action='store_true', help='If specified, samples feature embeddings jointly with dose-response embeddings; otherwise, features are fixed at monotone NMF embedding values.')
     
-    parser.add_argument('--aws', action='store_true', help='Specify this if running on EC2.')
+    parser.add_argument('--multiprocessing', action='store_true', help='Specify this if running on EC2.')
 
     # Get the arguments from the command line
     args = parser.parse_args()
-
-    if args.aws:
-        os.environ['OMP_NUM_THREADS'] = '1'
 
     # Seed the random number generator so we get reproducible results
     np.random.seed(args.seed)
@@ -405,8 +407,11 @@ if __name__ == '__main__':
         if args.big_plot:
             plt.savefig(os.path.join(args.plotdir, 'all.pdf'), bbox_inches='tight')
 
-    # Kill the threadpool
-    model.executor.shutdown()
+    if args.multiprocessing:
+        model.executor.close()
+    else:
+        # Kill the threadpool
+        model.executor.shutdown()
 
 
 

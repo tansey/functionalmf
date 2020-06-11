@@ -590,6 +590,11 @@ class NonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         Mu = np.matmul(model.W[None], np.transpose(model.V, [0,2,1])).transpose([1,0,2])
         return norm.logpdf(Y, Mu, scale=np.sqrt(self.sigma2))
 
+def _resample_W_worker(args):
+    return args[0]._resample_W_i(args[1], args[2], args[3])
+
+def _resample_V_worker(args):
+    return args[0]._resample_V_j(args[1], args[2], args[3])
 
 class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def __init__(self,
@@ -601,6 +606,8 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                  gass_ngrid=100, # Number of discrete points to approximate the valid ellipse regions
                  Row_constraints=None, # Optional extra matrix of permanant row constraint vectors
                  Col_constraints=None, # Optional extra matrix of permanent column constraint vectors
+                 rowcol_args=None, # Optional extra args to pass to each loglikelihood call
+                 multiprocessing=False, # If true, uses nthreads processes instead of threads (works better on AWS)
                  **kwargs):
         super().__init__(nrows, ncols, ndepth, **kwargs)
         self.loglikelihood = loglikelihood
@@ -616,6 +623,8 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         self.Row_constraints = Row_constraints
         self.Col_constraints = Col_constraints
 
+        self.rowcol_args = rowcol_args
+
         # If we were provided with a gaussian approximation, use that to
         # center the proposal
         if ep_approx is None:
@@ -623,16 +632,28 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         else:
             self.Mu_ep, self.Sigma_ep = ep_approx
 
-        self.executor = futures.ThreadPoolExecutor(max_workers=self.nthreads)
+        # Are we doing multi-processing or multi-threading?
+        self.multiprocessing = multiprocessing
+        if self.multiprocessing:
+            from multiprocessing import Pool
+            self.executor = Pool(self.nthreads)
+        else:
+            self.executor = futures.ThreadPoolExecutor(max_workers=self.nthreads)
 
     def _resample_W(self, data):
         # Get the constraints given the current values of V
         Constraints = self._w_constraints()
 
         # Sample each W_i independently (should be easier to satisfy the constraints)
-        resample_args = [(i, data, Constraints) for i in range(self.nrows)]
-        
-        results = self.executor.map(lambda p: self._resample_W_i(*p), resample_args)
+        if self.multiprocessing:
+            resample_args = [(self, i, data, Constraints) for i in range(self.nrows)]
+            ex = self.executor
+            self.executor = None
+            results = ex.map(_resample_W_worker, resample_args)
+            self.executor = ex
+        else:
+            resample_args = [(i, data, Constraints) for i in range(self.nrows)]
+            results = self.executor.map(lambda p: self._resample_W_i(*p), resample_args)
         for i,r in enumerate(results):
             ndims = min(self.nembeds, i+1)
             self.W[i,:ndims] = r
@@ -686,9 +707,15 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def _resample_V(self, data):
         # Get the constraints given the current values of W
         Constraints = self._v_constraints()
-        resample_args = [(j, data, Constraints) for j in range(self.ncols)]
-        # with futures.ThreadPoolExecutor(max_workers=self.nthreads) as executor:
-        results = self.executor.map(lambda p: self._resample_V_j(*p), resample_args)
+        if self.multiprocessing:
+            resample_args = [(self, j, data, Constraints) for j in range(self.ncols)]
+            ex = self.executor
+            self.executor = None
+            results = ex.map(_resample_V_worker, resample_args)
+            self.executor = ex
+        else:
+            resample_args = [(j, data, Constraints) for j in range(self.ncols)]
+            results = self.executor.map(lambda p: self._resample_V_j(*p), resample_args)
         for j,r in enumerate(results):
             self.V[j] = r
 
@@ -820,7 +847,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             # Get the black box log-likelihood
             # We could require that it supports batching, but this is cleaner,
             # albeit a little slower since it's not vectorized.
-            ll = np.array([self.loglikelihood(data, tau_i, w_ik, V_i, row=idx) for tau_i, w_ik in zip(tau, w_i)])
+            ll = np.array([self.loglikelihood(data, tau_i, w_ik, V_i, self.rowcol_args, row=idx) for tau_i, w_ik in zip(tau, w_i)])
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -832,7 +859,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             tau = (V_i * w_i[None,None]).sum(axis=-1)
 
             # Get the black box log-likelihood
-            ll = self.loglikelihood(data, tau, w_i, V_i, row=idx)
+            ll = self.loglikelihood(data, tau, w_i, V_i, self.rowcol_args, row=idx)
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -864,7 +891,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             # Get the black box log-likelihood
             # We could require that it supports batching, but this is cleaner,
             # albeit a little slower since it's not vectorized.
-            ll = np.array([self.loglikelihood(data, tau_i, self.W, V_jk, col=idx) for tau_i, V_jk in zip(tau, V_j)])
+            ll = np.array([self.loglikelihood(data, tau_i, self.W, V_jk, self.rowcol_args, col=idx) for tau_i, V_jk in zip(tau, V_j)])
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -890,7 +917,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             #     print(tau)
 
             # Get the black box log-likelihood
-            ll = self.loglikelihood(data, tau, self.W, V_j, col=idx)
+            ll = self.loglikelihood(data, tau, self.W, V_j, self.rowcol_args, col=idx)
 
             # Renormalize by the EP approximation, if we had one
             if mu_ep is not None:
@@ -907,7 +934,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def logprob(self, data, **kwargs):
         # Calculate the mean effects for each V_j in the batch
         tau = (self.W[:,None,None] * self.V[None]).sum(axis=-1)
-        return self.loglikelihood(data, tau, self.W, self.V)
+        return self.loglikelihood(data, tau, self.W, self.V, self.rowcol_args)
     
 
 
