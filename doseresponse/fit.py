@@ -89,13 +89,14 @@ def init_model(Y, likelihood, args):
         else:
             Row_constraints = None
             callback = None
+            U_samples = U[None]
     else:
         # Initialize the model with a nonnegative matrix factorization on the clipped values
         print('Initializing dose-response embeddings via NMF')
         W, V = tensor_nmf(Y, args.nembeds, monotone=True, max_entry=0.999, verbose=False)
-        U = None
         Row_constraints = None
         callback = None
+        U_samples = None
     
     # Sanity check that we're starting at valid points
     Mu = (W[:,None,None] * V[None]).sum(axis=-1)
