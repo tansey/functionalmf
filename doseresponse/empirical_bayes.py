@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.stats import gamma
-from scipy.special import logsumexp
+from scipy.misc import logsumexp
 
 class GammaGridLikelihood:
     def __init__(self, mean_grid, mean_probs, variance):
