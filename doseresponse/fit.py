@@ -224,7 +224,6 @@ if __name__ == '__main__':
         Y = Y_candidate
         print(held_out)
 
-
     # Get the raw NMF as a baseline
     print('Fitting NMF')
     W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999, verbose=False)
