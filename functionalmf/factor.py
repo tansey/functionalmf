@@ -2,7 +2,6 @@ import abc
 import numpy as np
 import scipy as sp
 import warnings
-from pypolyagamma import PyPolyaGamma
 from scipy.sparse import kron, eye, spdiags, csc_matrix, block_diag, diags
 from scipy.stats import norm, multivariate_normal as mvn, gamma
 from scipy.special import gammaln
@@ -408,6 +407,7 @@ class BinomialBayesianTensorFiltering(GaussianBayesianTensorFiltering):
         super().__init__(nrows, ncols, ndepth, **kwargs)
 
         # Initialize the Polya-Gamma sampler
+        from pypolyagamma import PyPolyaGamma
         self.pg = PyPolyaGamma(seed=pg_seed)
         self.nu2 = np.zeros((nrows, ncols, ndepth))
         self.nu2_flat = np.zeros(np.prod(self.nu2.shape))
@@ -596,6 +596,11 @@ def _resample_W_worker(args):
 def _resample_V_worker(args):
     return args[0]._resample_V_j(args[1], args[2], args[3])
 
+
+
+_W_shared_array = None
+_V_shared_array = None
+
 class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def __init__(self,
                  nrows, ncols, ndepth, # Data is N x M x T
@@ -635,8 +640,15 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         # Are we doing multi-processing or multi-threading?
         self.multiprocessing = multiprocessing
         if self.multiprocessing:
-            from multiprocessing import Pool
+            from multiprocessing import Pool, RawArray
+            import ctypes
             self.executor = Pool(self.nthreads)
+
+            # Convert W and V over to shared memory objects
+            _W_shared_array = RawArray(ctypes.c_double, self.W)
+            _V_shared_array = RawArray(ctypes.c_double, self.V)
+            self.W = np.ctypeslib.as_array(_W_shared_array).reshape(self.W.shape)
+            self.V = np.ctypeslib.as_array(_V_shared_array).reshape(self.V.shape)
         else:
             self.executor = futures.ThreadPoolExecutor(max_workers=self.nthreads)
 

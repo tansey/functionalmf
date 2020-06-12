@@ -1,6 +1,10 @@
 import numpy as np
 from scipy.stats import gamma
-from scipy.misc import logsumexp
+try:
+    from scipy.misc import logsumexp
+except(ImportError):
+    from scipy.special import logsumexp # scipy>=1.3.0
+
 
 class GammaGridLikelihood:
     def __init__(self, mean_grid, mean_probs, variance):
@@ -87,29 +91,30 @@ def estimate_likelihood(df, nbins=50, control_mean=1, tensor_outcomes=False, plo
     means, noise = np.array(means), np.array(noise).mean()
 
 
-    import matplotlib
+    # Histogram poisson regression for estimation of the mean distribution
     import statsmodels.api as sm
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    with sns.axes_style('white'):
-        plt.rc('font', weight='bold')
-        plt.rc('grid', lw=3)
-        plt.rc('lines', lw=3)
-        matplotlib.rcParams['pdf.fonttype'] = 42
-        matplotlib.rcParams['ps.fonttype'] = 42
+    counts, bins = np.histogram(means,bins = nbins//2)
+    K = 3 # K'th-order polynomial poisson regression
+    X = np.array([np.arange(len(counts))**k for k in range(K+1)]).T
+    poisson_glm = sm.GLM(counts, X, family=sm.families.Poisson())
+    poisson_glm_results = poisson_glm.fit()
 
-        # Histogram poisson regression for estimation of the mean distribution
-        counts, bins, _ = plt.hist(means, bins=nbins//2) # Use N/2 bins because we only look at the right halfspace
-        K = 3 # K'th-order polynomial poisson regression
-        X = np.array([np.arange(len(counts))**k for k in range(K+1)]).T
-        poisson_glm = sm.GLM(counts, X, family=sm.families.Poisson())
-        poisson_glm_results = poisson_glm.fit()
+    # Assume the mean prior distribution is symmetric
+    mean_grid = np.concatenate([2*control_mean-(bins[:-1] + bins[1:])[::-1]/2, (bins[:-1] + bins[1:])/2])
+    mean_probs = np.concatenate([poisson_glm_results.fittedvalues[::-1], poisson_glm_results.fittedvalues])
+    mean_probs /= mean_probs.sum() # normalize to make a proper distribution
+    if plot:
+        import matplotlib
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        with sns.axes_style('white'):
+            plt.rc('font', weight='bold')
+            plt.rc('grid', lw=3)
+            plt.rc('lines', lw=3)
+            matplotlib.rcParams['pdf.fonttype'] = 42
+            matplotlib.rcParams['ps.fonttype'] = 42
+            counts, bins, _ = plt.hist(means, bins=nbins//2) # Use N/2 bins because we only look at the right halfspace
 
-        # Assume the mean prior distribution is symmetric
-        mean_grid = np.concatenate([2*control_mean-(bins[:-1] + bins[1:])[::-1]/2, (bins[:-1] + bins[1:])/2])
-        mean_probs = np.concatenate([poisson_glm_results.fittedvalues[::-1], poisson_glm_results.fittedvalues])
-        mean_probs /= mean_probs.sum() # normalize to make a proper distribution
-        if plot:
             plt.plot(mean_grid, mean_probs*2*counts.sum(), lw=3, label='Empirical Bayes prior')
             plt.xlabel('Initial cell population size', fontsize=18, weight='bold', fontname='Times New Roman')
             plt.ylabel('# observations', fontsize=18, weight='bold', fontname='Times New Roman')

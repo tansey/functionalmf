@@ -7,7 +7,7 @@ from sksparse.cholmod import cholesky
 from functionalmf.elliptical_slice import elliptical_slice_
 from functionalmf.utils import ilogit
 from functionalmf.fast_mvn import sample_mvn_from_precision
-from pypolyagamma import PyPolyaGamma
+
 
 class _BayesianModel(object):
     __metaclass__ = abc.ABCMeta

@@ -5,8 +5,6 @@ priors.
 Author: Wesley Tansey (co-figured out with Christopher Tosh)
 Date: May 2019
 '''
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import norm
 from functionalmf.fast_mvn import sample_mvn
@@ -137,6 +135,8 @@ def benchmarks():
     1) naive ESS + rejection sampling
     2) logistic ESS + rejection sampling for monotonicity
     3) logistic ESS + posterior projection'''
+    import matplotlib
+    import matplotlib.pyplot as plt
     from functionalmf.elliptical_slice import elliptical_slice as ess
     from functionalmf.utils import ilogit, pav
     from scipy.stats import gamma

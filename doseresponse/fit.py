@@ -62,6 +62,15 @@ def init_model(Y, likelihood, args):
         #     W_without, _ = tensor_nmf(X_without[:,:,None], args.nembeds, V=U, fit_V=False, max_entry=0.999, verbose=False)
         X = X_with # Quick and dirty approach that just uses the samples with dose-response for now
 
+        # Convert U over to shared memory for efficiency
+        if args.multiprocessing:
+            from multiprocessing import Array
+            import ctypes
+
+            # Convert W and V over to shared memory objects
+            U = np.ctypeslib.as_array(Array(ctypes.c_double, U.flatten()).get_obj()).reshape(U.shape)
+            X = np.ctypeslib.as_array(Array(ctypes.c_double, X.flatten()).get_obj()).reshape(X.shape)
+
         if args.sample_features:
             # Create constraints for WU to be in [0,1]
             Row_zero = np.concatenate([U,np.full((U.shape[0],1), 0)], axis=1)
@@ -141,8 +150,15 @@ def init_model(Y, likelihood, args):
                                                           rowcol_args=extra_args, # Extra args to be passed to the 
                                                           multiprocessing=args.multiprocessing, # Use nthreads processes instead of threads
                                                           )
+
+    print(model.W.dtype, type(model.W))
+    print(X.dtype, type(X))
+
     # Initialize at the NMF fit
-    model.W, model.V = W, V
+    model.W[:], model.V[:] = W, V
+
+    print(model.W.dtype, type(model.W))
+    print(X.dtype, type(X))
 
     return model, U_samples, callback
 
@@ -150,8 +166,6 @@ if __name__ == '__main__':
     import os
     import argparse
     import pandas as pd
-    import matplotlib.pyplot as plt
-    import seaborn as sns
     parser = argparse.ArgumentParser(description='Bayesian tensor filtering for dose-response modeling.')
     
     # General settings
@@ -371,6 +385,8 @@ if __name__ == '__main__':
 
     if args.plot:
         print('Plotting results')
+        import matplotlib.pyplot as plt
+        import seaborn as sns
         Y = Y_full # Plot the full dataset
         if not os.path.exists(args.plotdir):
             os.makedirs(args.plotdir)
