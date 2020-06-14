@@ -229,6 +229,10 @@ if __name__ == '__main__':
     import random
     random.seed(args.seed)
 
+    # This (hopefully) takes care of an issue with multiprocessing running slow on AWS
+    # https://stackoverflow.com/questions/59374939/aws-ec2-python-parallel-extremely-slow
+    os.environ["OMP_NUM_THREADS"] = "1"
+
     # In case we exited early, clean up stuff -- TOOD: make this automatic in BTF
     try:
         sa.delete(args.sharedprefix + 'X')
