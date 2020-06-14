@@ -2,7 +2,7 @@ import abc
 import numpy as np
 import scipy as sp
 import warnings
-from scipy.sparse import kron, eye, spdiags, csc_matrix, block_diag, diags
+from scipy.sparse import kron, eye, spdiags, csc_matrix, block_diag, diags, coo_matrix
 from scipy.stats import norm, multivariate_normal as mvn, gamma
 from scipy.special import gammaln
 from scipy.linalg import solve_triangular
@@ -16,6 +16,8 @@ from functionalmf.fast_mvn import sample_mvn_from_precision
 from functionalmf.elliptical_slice import elliptical_slice, elliptical_slice_
 from functionalmf.gass import gass
 from concurrent import futures
+from multiprocessing import Pool
+import SharedArray as sa
 
 class BayesianTensorFiltering(_BayesianModel):
     def __init__(self, nrows, ncols, ndepth,
@@ -100,36 +102,45 @@ class BayesianTensorFiltering(_BayesianModel):
     def resample(self, data, **kwargs):
         # Sample the row-wise embedding variance
         if self.sample_sigma2:
-            W_vec, _ = self._pack_W(self.W)
-            self.sigma2 = 1/self.sigma2_model.resample((np.zeros_like(W_vec), W_vec))
+            self._resample_sigma2()
 
         # Update the local shrinkage variables
         if self.sample_Tau2:
-            for j in range(self.ncols):
-                deltas = self.Delta.dot(self.V[j])
-                rate = (deltas**2).sum(axis=1) / (2*self.lam2) + 1/self.Tau2_c[j].clip(self.stability, 1/self.stability)
-                self.Tau2[j] = 1/np.random.gamma((self.nembeds + 1) / 2, 1/rate.clip(self.stability, 1/self.stability))
-                self.Tau2_c[j] = 1/np.random.gamma(1, 1 / (1/self.Tau2[j] + 1/self.Tau2_b[j]).clip(self.stability, 1/self.stability))
-                self.Tau2_b[j] = 1/np.random.gamma(1, 1 / (1/self.Tau2_c[j] + 1/self.Tau2_a[j]).clip(self.stability, 1/self.stability))
-                self.Tau2_a[j] = 1/np.random.gamma(1, 1 / (1/self.Tau2_b[j] + 1).clip(self.stability, 1/self.stability))
+            self._resample_Tau2()
 
         if self.sample_lam2:
-            # TODO: make lam2 be tf_k specific. so for an order 2 model, you have
-            # a separate lam2 for the anchor (fixed to be very large), one for
-            # the TV penalty, one for the linear penalty, and one for the quadratic
-            rate = 1/self.lam2_a
-            for j in range(self.ncols):
-                deltas = self.Delta.dot(self.V[j])
-                rate = ((deltas / np.sqrt(self.Tau2[j])[:,None])**2).sum() / 2
-            shape = (self.Delta.shape[0] * self.ncols * self.nembeds + 1)
-            self.lam2 = max(1e-5, 1/np.random.gamma(shape/2, 1/rate)) # Clip lam2 at some reasonable value
-            self.lam2_a = 1/np.random.gamma(1, 1 / (1/self.lam2 + 1))
+            self._resample_lam2()
             
         if self.sample_W:
             self._resample_W(data)
 
         if self.sample_V:
             self._resample_V(data)
+
+    def _resample_sigma2(self):
+        W_vec, _ = self._pack_W(self.W)
+        self.sigma2 = 1/self.sigma2_model.resample((np.zeros_like(W_vec), W_vec))
+
+    def _resample_Tau2(self):
+        for j in range(self.ncols):
+            deltas = self.Delta.dot(self.V[j])
+            rate = (deltas**2).sum(axis=1) / (2*self.lam2) + 1/self.Tau2_c[j].clip(self.stability, 1/self.stability)
+            self.Tau2[j] = 1/np.random.gamma((self.nembeds + 1) / 2, 1/rate.clip(self.stability, 1/self.stability))
+            self.Tau2_c[j] = 1/np.random.gamma(1, 1 / (1/self.Tau2[j] + 1/self.Tau2_b[j]).clip(self.stability, 1/self.stability))
+            self.Tau2_b[j] = 1/np.random.gamma(1, 1 / (1/self.Tau2_c[j] + 1/self.Tau2_a[j]).clip(self.stability, 1/self.stability))
+            self.Tau2_a[j] = 1/np.random.gamma(1, 1 / (1/self.Tau2_b[j] + 1).clip(self.stability, 1/self.stability))
+
+    def _resample_lam2(self):
+        # TODO: make lam2 be tf_k specific. so for an order 2 model, you have
+        # a separate lam2 for the anchor (fixed to be very large), one for
+        # the TV penalty, one for the linear penalty, and one for the quadratic
+        rate = 1/self.lam2_a
+        for j in range(self.ncols):
+            deltas = self.Delta.dot(self.V[j])
+            rate = ((deltas / np.sqrt(self.Tau2[j])[:,None])**2).sum() / 2
+        shape = (self.Delta.shape[0] * self.ncols * self.nembeds + 1)
+        self.lam2 = max(1e-5, 1/np.random.gamma(shape/2, 1/rate)) # Clip lam2 at some reasonable value
+        self.lam2_a = 1/np.random.gamma(1, 1 / (1/self.lam2 + 1))
 
     def _pack_W(self, W):
         # W is a lower-triangular matrix with isotropic variance
@@ -590,16 +601,274 @@ class NonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         Mu = np.matmul(model.W[None], np.transpose(model.V, [0,2,1])).transpose([1,0,2])
         return norm.logpdf(Y, Mu, scale=np.sqrt(self.sigma2))
 
-def _resample_W_worker(args):
-    return args[0]._resample_W_i(args[1], args[2], args[3])
 
-def _resample_V_worker(args):
-    return args[0]._resample_V_j(args[1], args[2], args[3])
+def _make_shared(arr, name):
+    brr = sa.create('shm://{}'.format(name), arr.shape, dtype=arr.dtype)
+    brr[:] = arr
+    return brr
 
+class MultiprocessingContext:
+    def __init__(self, model):
+        self.multiprocessing = True
+        self.sharedprefix = model.sharedprefix
+        self.gass_ngrid = model.gass_ngrid
+        self.loglikelihood = model.loglikelihood
+        self.has_ep_approx = model.Mu_ep is not None
+        self.has_Row_constraints = model.Row_constraints is not None
+        self.sigma2 = model.sigma2
+        self.lam2 = model.lam2
+        self.stability = model.stability
 
+    def load(self):
+        self.W = sa.attach(self.sharedprefix + 'W')
+        self.V = sa.attach(self.sharedprefix + 'V')
+        self.Tau2 = sa.attach(self.sharedprefix + 'Tau2')
+        self.Constraints_A = sa.attach(self.sharedprefix + 'Constraints_A')
+        self.Constraints_C = sa.attach(self.sharedprefix + 'Constraints_C')
+        
+        self.Delta = coo_matrix((sa.attach(self.sharedprefix + 'Delta_data'),
+                                    (sa.attach(self.sharedprefix + 'Delta_row'), sa.attach(self.sharedprefix + 'Delta_col'))))
 
-_W_shared_array = None
-_V_shared_array = None
+        self.Row_constraints = sa.attach(self.sharedprefix + 'Row_constraints') if self.has_Row_constraints else None
+        self.Mu_ep = sa.attach(self.sharedprefix + 'Mu_ep') if self.has_ep_approx else None
+        self.Sigma_ep = sa.attach(self.sharedprefix + 'Sigma_ep') if self.has_ep_approx else None
+
+        self.nrows = self.W.shape[0]
+        self.ncols, self.ndepth = self.V.shape[0], self.V.shape[1]
+        self.nembeds = self.W.shape[1]
+        self.nconstraints = self.Constraints_A.shape[0]
+    
+def _resample_W_i(args):
+    self, i, data = args
+    if self.multiprocessing:
+        self.load()
+
+    # Enforce the lower-triangular structure of W
+    ndims = min(self.nembeds, i+1)
+    W_i = self.W[i,:ndims]
+    V_i = self.V[:,:,:ndims]
+
+    # Get the constraints given the current values of V
+    Constraints = _w_constraints(self, i)
+    
+    # Update the mean and precision if we have an EP approximation
+    if self.Mu_ep is not None:
+        Mu_ep_i, Sigma_ep_i = self.Mu_ep[i], self.Sigma_ep[i]
+        mu_i = ((Mu_ep_i / Sigma_ep_i**2)[...,None] * V_i).sum(axis=1).sum(axis=0)
+        Q_i = ((V_i[:,:,:,None] / Sigma_ep_i[:,:,None,None]**2 * V_i[:,:,None]).sum(axis=1).sum(axis=0) + 
+                    np.eye(ndims)/self.sigma2)
+        mu_i = np.linalg.solve(Q_i, mu_i)
+    else:
+        mu_i = np.zeros(ndims)
+        Q_i = np.eye(ndims)/self.sigma2
+        Mu_ep_i, Sigma_ep_i = None, None
+
+    # Sample a new W_i via generalized analytical slice sampling
+    try:
+        W_updated, _ = gass(W_i, Q_i, _w_loglikelihood, Constraints,
+                         mu=mu_i,
+                         ll_args=(i, data, V_i, Mu_ep_i, Sigma_ep_i, self.loglikelihood),
+                         precision=True,
+                         ngrid=self.gass_ngrid)
+    except:
+        np.set_printoptions(suppress=True, precision=2)
+        print('W[{}]={}'.format(i, self.W[i]))
+        print('V\n', self.V)
+        print()
+        print('Constraints A:\n', self.Constraints_A)
+        if self.Row_constraints is not None:
+            print('Row constraints and evaluation:')
+            Row_constraints_and_eval = np.concatenate([self.Row_constraints, self.Row_constraints[:,:ndims].dot(W_i)[:,None]], axis=1)
+            print(np.concatenate([Row_constraints_and_eval, (Row_constraints_and_eval[:,-1] >= Row_constraints_and_eval[:,-2])[:,None]],axis=1))
+        print('Constraints W[{}]:\n{}'.format(i, Constraints))
+        print()
+        raise Exception()
+    self.W[i,:ndims] = W_updated
+
+def _w_constraints(self, i):
+    # For tau_ij{1,...,t} effects, the constraints imply:
+    # D<w_i,v_j{1,...,t}> = <Dv_j., w_i> > c
+    # Enforce the lower-triangular structure of W
+    ndims = min(self.nembeds, i+1)
+    A = (self.Constraints_A[None,:,:,None] * self.V[:,None])[...,:ndims].sum(axis=2) # J x ncols x nembeds
+    C = np.tile(self.Constraints_C, (self.ncols, 1))
+    A = A.reshape((-1, ndims))
+    Constraints_i = np.concatenate([A, C], axis=1)
+
+    # Add any fixed constraints
+    if self.Row_constraints is not None:
+        Row_constraints_i = np.concatenate([self.Row_constraints[:,:ndims], self.Row_constraints[:,-1:]], axis=1)
+        Constraints_i = np.concatenate([Constraints_i, Row_constraints_i], axis=0)
+    return Constraints_i
+
+def _w_loglikelihood(w_i, ll_args):
+    idx, data, V_i, mu_ep, sigma_ep, loglikelihood = ll_args
+
+    # The GASS sampler may call this with a single vector w_i or a batch
+    # of multiple candidate vectors.
+    if len(w_i.shape) > 1:
+        # Calculate the mean effects for each w_i in the batch
+        tau = (V_i[None] * w_i[:,None,None]).sum(axis=-1)
+
+        # Get the black box log-likelihood
+        # We could require that it supports batching, but this is cleaner,
+        # albeit a little slower since it's not vectorized.
+        ll = np.array([loglikelihood(data, tau_i, w_ik, V_i, row=idx) for tau_i, w_ik in zip(tau, w_i)])
+
+        # Renormalize by the EP approximation, if we had one
+        if mu_ep is not None:
+            ll -= norm.logpdf(tau, mu_ep[None], sigma_ep[None]).sum(axis=-1).sum(axis=-1)
+        assert len(ll) == w_i.shape[0]
+        assert len(ll.shape) == 1
+    else:
+        # Calculate the mean effect
+        tau = (V_i * w_i[None,None]).sum(axis=-1)
+
+        # Get the black box log-likelihood
+        ll = loglikelihood(data, tau, w_i, V_i, row=idx)
+
+        # Renormalize by the EP approximation, if we had one
+        if mu_ep is not None:
+            # Divide by the normal likelihood
+            ll -= norm.logpdf(tau, mu_ep, sigma_ep).sum()
+    return ll
+
+def _resample_V_j(args):
+    self, j, data = args
+    if self.multiprocessing:
+        self.load()
+        
+    Constraints = _v_constraints(self)
+    I_embed = eye(self.nembeds, format='csc')
+    try:
+        # Get the global-local shrinkage prior as a diagonal precision matrix
+        lam_Tau = spdiags((1/ (self.lam2 * self.Tau2[j]).clip(self.stability, 1/self.stability)), 0, self.Tau2.shape[1], self.Tau2.shape[1], format='csc')
+        DLD = self.Delta.T.tocsc().dot(lam_Tau).dot(self.Delta)
+        Q_prior = kron(I_embed, DLD).tocsc()
+
+        if self.Mu_ep is not None:
+            # Vectorize the EP tensor and remove missing data
+            Mu_flat = self.Mu_ep[:,j].flatten()
+            missing = np.isnan(Mu_flat)
+            Mu_flat = Mu_flat[~missing]
+            Sigma_flat = spdiags((1/self.Sigma_ep[:,j].flatten()[~missing])**2, 0, Mu_flat.shape[0], Mu_flat.shape[0], format='csc')
+
+            # Treat the W embeddings as covariates in a linear regression
+            X = kron(self.W, eye(self.ndepth, format='csc'), format='csc')[~missing]
+            Xt = X.T.dot(Sigma_flat).tocsc()
+            Q_likelihood = Xt.dot(X)
+            sparsity_pattern = missing
+            mu_part = Xt.dot(Mu_flat)
+
+            # Ridge regression
+            # stabilizer = spdiags(np.full(Q_prior.shape[0],0.99), 0, Q_prior.shape[0], Q_prior.shape[0], format='csc')
+            Q = Q_likelihood + Q_prior
+
+            factor = cholesky(Q)
+            mu = factor.solve_A(mu_part)
+            mu_ep_j = self.Mu_ep[:,j]
+            sigma_ep_j = self.Sigma_ep[:,j]
+        else:
+            Q = Q_prior #+ spdiags(1e-8, 0, Q_prior.shape[0], Q_prior.shape[0], format='csc')
+            factor = cholesky(Q)
+            mu = np.zeros(Q.shape[0])
+            mu_ep_j, sigma_ep_j = None, None
+        
+        V_j = self.V[j].T.flatten()
+        V_args = (j, data, self, mu_ep_j, sigma_ep_j)
+        
+        V_updated = gass(V_j, factor,
+                         _v_loglikelihood,
+                         Constraints, 
+                         ll_args=V_args,
+                         mu=mu, sparse=True, precision=True, ngrid=self.gass_ngrid,
+                         chol_factor=True, Q_shape=Q.shape, verbose=False)[0].reshape((self.nembeds, self.ndepth)).T
+    except:
+        print('Bad cholesky!')
+        np.set_printoptions(precision=3, suppress=True, linewidth=250, edgeitems=100000, threshold=100000)
+        print()
+        print(j)
+        print('W:')
+        print(self.W)
+        print()
+        print('V[{}]:'.format(j))
+        print(self.V[j])
+        print()
+        print('Mu[:,{}]:'.format(j))
+        Mu = (self.W[:,None] * self.V[None,j]).sum(axis=-1)
+        print(Mu)
+        print()
+        print('Monotonicity in Mu[:,{}]:'.format(j))
+        print(Mu[:,:-1]-Mu[:,1:])
+        print()
+        print('Constraints A:')
+        print(self.Constraints_A)
+        # print('Constraints V:')
+        # print(Constraints)
+        print()
+        print('V_j (flattened):')
+        print(V_j)
+        print('lam tau:')
+        print(lam_Tau.todense())
+        print('delta.lamtau.delta:')
+        print(np.linalg.inv(self.Delta.T.tocsc().dot(lam_Tau).dot(self.Delta).todense()))
+        print('Q:')
+        print(np.linalg.inv(Q.todense()))
+        print()
+        print('Q condition number:')
+        print(np.linalg.cond(np.linalg.inv(Q.todense())))
+        raise Exception()
+    
+    # Update the column with the new sample
+    self.V[j] =  V_updated
+
+def _v_constraints(self):
+    # Derive the constraints for each V_j matrix based on the current W values.
+    # For tau_ij{1,...,t} effects, the constraints imply:
+    # D<w_i,v_j{1,...,t}> = <v_j., Dw_i> > c
+    A = (self.Constraints_A[None,:,None,:] * self.W[:,None,:,None]).reshape((self.nrows*self.nconstraints, self.nembeds*self.ndepth))
+    C = np.tile(self.Constraints_C, (self.nrows, 1))
+    V_constraints = np.concatenate([A,C], axis=1)
+    return V_constraints
+
+def _v_loglikelihood(V_j, ll_args):
+    idx, data, self, mu_ep, sigma_ep = ll_args
+
+    # The GASS sampler may call this with a single vector V_j or a batch
+    # of multiple candidate vectors.
+    if len(V_j.shape) > 1:
+        # Batch of T x D matrices
+        V_j = np.transpose(V_j.reshape((-1, self.nembeds, self.ndepth)), [0,2,1])
+
+        # Calculate the mean effects for each V_j in the batch
+        tau = (V_j[:,None] * self.W[None,:,None]).sum(axis=-1)
+
+        # Get the black box log-likelihood
+        # We could require that it supports batching, but this is cleaner,
+        # albeit a little slower since it's not vectorized.
+        ll = np.array([self.loglikelihood(data, tau_i, self.W, V_jk, col=idx) for tau_i, V_jk in zip(tau, V_j)])
+
+        # Renormalize by the EP approximation, if we had one
+        if mu_ep is not None:
+            ll -= norm.logpdf(tau, mu_ep[None], sigma_ep[None]).sum(axis=-1).sum(axis=-1)
+
+        assert len(ll) == V_j.shape[0]
+        assert len(ll.shape) == 1
+    else:
+        # Change from a vector to a T x D matrix
+        V_j = V_j.reshape((self.nembeds, self.ndepth)).T
+
+        # Calculate the mean effect
+        tau = (V_j[None] * self.W[:,None]).sum(axis=-1)
+
+        # Get the black box log-likelihood
+        ll = self.loglikelihood(data, tau, self.W, V_j, col=idx)
+
+        # Renormalize by the EP approximation, if we had one
+        if mu_ep is not None:
+            # Divide by the normal likelihood
+            ll -= norm.logpdf(tau, mu_ep, sigma_ep).sum()
+    return ll
 
 class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def __init__(self,
@@ -610,9 +879,10 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                  nthreads=3, # Number of parallel worker processes to use (technically not threads right now)
                  gass_ngrid=100, # Number of discrete points to approximate the valid ellipse regions
                  Row_constraints=None, # Optional extra matrix of permanant row constraint vectors
-                 Col_constraints=None, # Optional extra matrix of permanent column constraint vectors
-                 rowcol_args=None, # Optional extra args to pass to each loglikelihood call
-                 multiprocessing=False, # If true, uses nthreads processes instead of threads (works better on AWS)
+                 multiprocessing=True, # If true, uses nthreads processes instead of threads (works better on AWS)
+                 sharedprefix=None, # A unique prefix to prepend to all variable names
+                 worker_init=None, # Optional initialization function for workers
+                 worker_init_args=None, # Optional initalization arguments for workers
                  **kwargs):
         super().__init__(nrows, ncols, ndepth, **kwargs)
         self.loglikelihood = loglikelihood
@@ -623,12 +893,9 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         self.nthreads = nthreads
         self.gass_ngrid = gass_ngrid
 
-        # Row and column constraints that remain fixed, as opposed to the
+        # Row constraints that remain fixed, as opposed to the
         # Constraints which are based on the opposite embedding
         self.Row_constraints = Row_constraints
-        self.Col_constraints = Col_constraints
-
-        self.rowcol_args = rowcol_args
 
         # If we were provided with a gaussian approximation, use that to
         # center the proposal
@@ -640,308 +907,70 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         # Are we doing multi-processing or multi-threading?
         self.multiprocessing = multiprocessing
         if self.multiprocessing:
-            from multiprocessing import Pool, RawArray
-            import ctypes
-            self.executor = Pool(self.nthreads)
+            # Create a process pool
+            self.executor = Pool(self.nthreads, initializer=worker_init, initargs=worker_init_args)
 
-            # Convert W and V over to shared memory objects
-            _W_shared_array = RawArray(ctypes.c_double, self.W)
-            _V_shared_array = RawArray(ctypes.c_double, self.V)
-            self.W = np.ctypeslib.as_array(_W_shared_array).reshape(self.W.shape)
-            self.V = np.ctypeslib.as_array(_V_shared_array).reshape(self.V.shape)
+            # Use a unique prefix to prepend to all shared variables
+            if sharedprefix is None:
+                import uuid
+                sharedprefix = str(uuid.uuid4())[:8]
+            self.sharedprefix = sharedprefix
+
+            # Convert variables to shared memory objects
+            self.W = _make_shared(self.W, self.sharedprefix + 'W')
+            self.V = _make_shared(self.V, self.sharedprefix + 'V')
+            self.Tau2 = _make_shared(self.Tau2, self.sharedprefix + 'Tau2')
+            self.Constraints_A = _make_shared(self.Constraints_A, self.sharedprefix + 'Constraints_A')
+            self.Constraints_C = _make_shared(self.Constraints_C, self.sharedprefix + 'Constraints_C')
+            self.Delta_data = _make_shared(self.Delta.data, self.sharedprefix + 'Delta_data')
+            self.Delta_row = _make_shared(self.Delta.row, self.sharedprefix + 'Delta_row')
+            self.Delta_col = _make_shared(self.Delta.col, self.sharedprefix + 'Delta_col')
+            if self.Row_constraints is not None:
+                self.Row_constraints = _make_shared(self.Row_constraints, self.sharedprefix + 'Row_constraints')
+            if ep_approx is not None:
+                self.Mu_ep = _make_shared(self.Mu_ep, self.sharedprefix + 'Mu_ep')
+                self.Sigma_ep = _make_shared(self.Sigma_ep, self.sharedprefix + 'Sigma_ep')
         else:
             self.executor = futures.ThreadPoolExecutor(max_workers=self.nthreads)
 
-    def _resample_W(self, data):
-        # Get the constraints given the current values of V
-        Constraints = self._w_constraints()
+    def shutdown(self):
+        if self.multiprocessing:
+            self.executor.close()
+            sa.delete(self.sharedprefix + 'W')
+            sa.delete(self.sharedprefix + 'V')
+            sa.delete(self.sharedprefix + 'Tau2')
+            sa.delete(self.sharedprefix + 'Constraints_A')
+            sa.delete(self.sharedprefix + 'Constraints_C')
+            sa.delete(self.sharedprefix + 'Delta_data')
+            sa.delete(self.sharedprefix + 'Delta_row')
+            sa.delete(self.sharedprefix + 'Delta_col')
+            if self.Row_constraints is not None:
+                sa.delete(self.sharedprefix + 'Row_constraints')
+            if self.Mu_ep is not None:
+                sa.delete(self.sharedprefix + 'Mu_ep')
+                sa.delete(self.sharedprefix + 'Sigma_ep')
+        else:
+            self.executor.shutdown()
 
+    def _resample_W(self, data):
         # Sample each W_i independently (should be easier to satisfy the constraints)
         if self.multiprocessing:
-            resample_args = [(self, i, data, Constraints) for i in range(self.nrows)]
-            ex = self.executor
-            self.executor = None
-            results = ex.map(_resample_W_worker, resample_args)
-            self.executor = ex
+            context = MultiprocessingContext(self)
+            resample_args = [(context, i, data) for i in range(self.nrows)]
+            self.executor.map(_resample_W_i, resample_args)
         else:
-            resample_args = [(i, data, Constraints) for i in range(self.nrows)]
-            results = self.executor.map(lambda p: self._resample_W_i(*p), resample_args)
-        for i,r in enumerate(results):
-            ndims = min(self.nembeds, i+1)
-            self.W[i,:ndims] = r
-
-    def _resample_W_i(self, i, data, Constraints):
-        # Enforce the lower-triangular structure of W
-        ndims = min(self.nembeds, i+1)
-        W_i = self.W[i,:ndims]
-        V_i = self.V[:,:,:ndims]
-        
-        # Update the mean and precision if we have an EP approximation
-        if self.Mu_ep is not None:
-            Mu_ep_i, Sigma_ep_i = self.Mu_ep[i], self.Sigma_ep[i]
-            mu_i = ((Mu_ep_i / Sigma_ep_i**2)[...,None] * V_i).sum(axis=1).sum(axis=0)
-            Q_i = ((V_i[:,:,:,None] / Sigma_ep_i[:,:,None,None]**2 * V_i[:,:,None]).sum(axis=1).sum(axis=0) + 
-                        np.eye(ndims)/self.sigma2)
-            mu_i = np.linalg.solve(Q_i, mu_i)
-        else:
-            mu_i = np.zeros(ndims)
-            Q_i = np.eye(ndims)/self.sigma2
-            Mu_ep_i, Sigma_ep_i = None, None
-
-        # Sample a new W_i via generalized analytical slice sampling
-        try:
-            W_updated, _ = gass(W_i, Q_i, self._w_loglikelihood, Constraints[i],
-                             mu=mu_i,
-                             ll_args=(i, data, V_i, Mu_ep_i, Sigma_ep_i),
-                             precision=True,
-                             ngrid=self.gass_ngrid)
-        except:
-            np.set_printoptions(suppress=True, precision=2)
-            print(i)
-            print('W:')
-            print(self.W)
-            print()
-            print('V')
-            print(self.V)
-            print()
-            print('Constraints A:')
-            print(self.Constraints_A)
-            if self.Row_constraints is not None:
-                print('Row constraints and evaluation:')
-                Row_constraints_and_eval = np.concatenate([self.Row_constraints, self.Row_constraints[:,:-1].dot(self.W[i])[:,None]], axis=1)
-                print(np.concatenate([Row_constraints_and_eval, (Row_constraints_and_eval[:,-1] >= Row_constraints_and_eval[:,-2])[:,None]],axis=1))
-            print('Constraints W[{}]:'.format(i))
-            print(Constraints[i])
-            print()
-            raise Exception()
-        return W_updated
-        
+            resample_args = [(self, i, data) for i in range(self.nrows)]
+            self.executor.map(lambda p: _resample_W_i(*p), resample_args)
+    
     def _resample_V(self, data):
         # Get the constraints given the current values of W
-        Constraints = self._v_constraints()
         if self.multiprocessing:
-            resample_args = [(self, j, data, Constraints) for j in range(self.ncols)]
-            ex = self.executor
-            self.executor = None
-            results = ex.map(_resample_V_worker, resample_args)
-            self.executor = ex
+            context = MultiprocessingContext(self)
+            resample_args = [(context, j, data) for j in range(self.ncols)]
+            self.executor.map(_resample_V_j, resample_args)
         else:
-            resample_args = [(j, data, Constraints) for j in range(self.ncols)]
-            results = self.executor.map(lambda p: self._resample_V_j(*p), resample_args)
-        for j,r in enumerate(results):
-            self.V[j] = r
-
-    def _resample_V_j(self, j, data, Constraints):
-        I_embed = eye(self.nembeds, format='csc')
-        try:
-            # Get the global-local shrinkage prior as a diagonal precision matrix
-            lam_Tau = spdiags((1/ (self.lam2 * self.Tau2[j]).clip(self.stability, 1/self.stability)), 0, self.Tau2.shape[1], self.Tau2.shape[1], format='csc')
-            DLD = self.Delta.T.tocsc().dot(lam_Tau).dot(self.Delta)
-            Q_prior = kron(I_embed, DLD).tocsc()
-
-            if self.Mu_ep is not None:
-                # Vectorize the EP tensor and remove missing data
-                Mu_flat = self.Mu_ep[:,j].flatten()
-                missing = np.isnan(Mu_flat)
-                Mu_flat = Mu_flat[~missing]
-                Sigma_flat = spdiags((1/self.Sigma_ep[:,j].flatten()[~missing])**2, 0, Mu_flat.shape[0], Mu_flat.shape[0], format='csc')
-
-                # Treat the W embeddings as covariates in a linear regression
-                X = kron(self.W, eye(self.ndepth, format='csc'), format='csc')[~missing]
-                Xt = X.T.dot(Sigma_flat).tocsc()
-                Q_likelihood = Xt.dot(X)
-                sparsity_pattern = missing
-                mu_part = Xt.dot(Mu_flat)
-
-                # Ridge regression
-                # stabilizer = spdiags(np.full(Q_prior.shape[0],0.99), 0, Q_prior.shape[0], Q_prior.shape[0], format='csc')
-                Q = Q_likelihood + Q_prior
-
-                factor = cholesky(Q)
-                mu = factor.solve_A(mu_part)
-                mu_ep_j = self.Mu_ep[:,j]
-                sigma_ep_j = self.Sigma_ep[:,j]
-            else:
-                Q = Q_prior #+ spdiags(1e-8, 0, Q_prior.shape[0], Q_prior.shape[0], format='csc')
-                factor = cholesky(Q)
-                mu = np.zeros(Q.shape[0])
-                mu_ep_j, sigma_ep_j = None, None
-            
-            V_j = self.V[j].T.flatten()
-            V_args = (j, data, mu_ep_j, sigma_ep_j)
-            
-            V_updated = gass(V_j, factor,
-                             self._v_loglikelihood,
-                             Constraints, 
-                             ll_args=V_args,
-                             mu=mu, sparse=True, precision=True, ngrid=self.gass_ngrid,
-                             chol_factor=True, Q_shape=Q.shape, verbose=False)[0].reshape((self.nembeds, self.ndepth)).T
-        except:
-            print('Bad cholesky!')
-            np.set_printoptions(precision=3, suppress=True, linewidth=250, edgeitems=100000, threshold=100000)
-            print()
-            print(j)
-            print('W:')
-            print(self.W)
-            print()
-            print('V[{}]:'.format(j))
-            print(self.V[j])
-            print()
-            print('Mu[:,{}]:'.format(j))
-            Mu = (self.W[:,None] * self.V[None,j]).sum(axis=-1)
-            print(Mu)
-            print()
-            print('Monotonicity in Mu[:,{}]:'.format(j))
-            print(Mu[:,:-1]-Mu[:,1:])
-            print()
-            print('Constraints A:')
-            print(self.Constraints_A)
-            # print('Constraints V:')
-            # print(Constraints)
-            print()
-            print('V_j (flattened):')
-            print(V_j)
-            print('lam tau:')
-            print(lam_Tau.todense())
-            print('delta.lamtau.delta:')
-            print(np.linalg.inv(self.Delta.T.tocsc().dot(lam_Tau).dot(self.Delta).todense()))
-            print('Q:')
-            print(np.linalg.inv(Q.todense()))
-            print()
-            print('Q condition number:')
-            print(np.linalg.cond(np.linalg.inv(Q.todense())))
-            raise Exception()
-        return V_updated
-
-
-    def _w_constraints(self):
-        # Derive the constraints for each W_i vector based on the current V values.
-        Constraints_W = []
-        for i in range(self.nrows):
-            # For tau_ij{1,...,t} effects, the constraints imply:
-            # D<w_i,v_j{1,...,t}> = <Dv_j., w_i> > c
-            if i < self.nembeds:
-                # Enforce the lower-triangular structure of W
-                ndims = min(self.nembeds, i+1)
-                A = (self.Constraints_A[None,:,:,None] * self.V[:,None])[...,:ndims].sum(axis=2) # J x ncols x nembeds
-                C = np.tile(self.Constraints_C, (self.ncols, 1))
-                A = A.reshape((-1, ndims))
-                Constraints_i = np.concatenate([A, C], axis=1)
-
-                # Add any fixed constraints
-                if self.Row_constraints is not None:
-                    Row_constraints_i = np.concatenate([self.Row_constraints[:,:ndims], self.Row_constraints[:,-1:]], axis=1)
-                    Constraints_i = np.concatenate([Constraints_i, Row_constraints_i], axis=0)
-            Constraints_W.append(Constraints_i)
-        return Constraints_W
-
-    def _v_constraints(self):
-        # Derive the constraints for each V_j matrix based on the current W values.
-        # For tau_ij{1,...,t} effects, the constraints imply:
-        # D<w_i,v_j{1,...,t}> = <v_j., Dw_i> > c
-        A = (self.Constraints_A[None,:,None,:] * self.W[:,None,:,None]).reshape((self.nrows*self.nconstraints, self.nembeds*self.ndepth))
-        C = np.tile(self.Constraints_C, (self.nrows, 1))
-        V_constraints = np.concatenate([A,C], axis=1)
-        if self.Col_constraints is not None:
-            # TODO: enable constraints on the column embeddings
-            raise NotImplementedError
-        return V_constraints
-
-    def _w_loglikelihood(self, w_i, ll_args):
-        idx, data, V_i, mu_ep, sigma_ep = ll_args
-
-        # The GASS sampler may call this with a single vector w_i or a batch
-        # of multiple candidate vectors.
-        if len(w_i.shape) > 1:
-            # Calculate the mean effects for each w_i in the batch
-            tau = (V_i[None] * w_i[:,None,None]).sum(axis=-1)
-
-            # Get the black box log-likelihood
-            # We could require that it supports batching, but this is cleaner,
-            # albeit a little slower since it's not vectorized.
-            ll = np.array([self.loglikelihood(data, tau_i, w_ik, V_i, self.rowcol_args, row=idx) for tau_i, w_ik in zip(tau, w_i)])
-
-            # Renormalize by the EP approximation, if we had one
-            if mu_ep is not None:
-                ll -= norm.logpdf(tau, mu_ep[None], sigma_ep[None]).sum(axis=-1).sum(axis=-1)
-            assert len(ll) == w_i.shape[0]
-            assert len(ll.shape) == 1
-        else:
-            # Calculate the mean effect
-            tau = (V_i * w_i[None,None]).sum(axis=-1)
-
-            # Get the black box log-likelihood
-            ll = self.loglikelihood(data, tau, w_i, V_i, self.rowcol_args, row=idx)
-
-            # Renormalize by the EP approximation, if we had one
-            if mu_ep is not None:
-                # Divide by the normal likelihood
-                # if len(w_i) == 1:
-                #     print('ll: {}'.format(ll))
-                #     print('normalizer: {}'.format(norm.logpdf(tau, mu_ep, sigma_ep).sum()))
-                #     print('tau: {}'.format(tau))
-                #     print('mu_ep: {}'.format(mu_ep))
-                #     print('sigma_ep: {}'.format(sigma_ep))
-                ll -= norm.logpdf(tau, mu_ep, sigma_ep).sum()
-        return ll
-
-    def _v_loglikelihood(self, V_j, ll_args):
-        idx, data, mu_ep, sigma_ep = ll_args
-
-        # The GASS sampler may call this with a single vector V_j or a batch
-        # of multiple candidate vectors.
-        if len(V_j.shape) > 1:
-            # Batch of T x D matrices
-            V_j = np.transpose(V_j.reshape((-1, self.nembeds, self.ndepth)), [0,2,1])
-            # if idx == 0:
-            #     print('Batch V_j:')
-            #     print(V_j)
-
-            # Calculate the mean effects for each V_j in the batch
-            tau = (V_j[:,None] * self.W[None,:,None]).sum(axis=-1)
-
-            # Get the black box log-likelihood
-            # We could require that it supports batching, but this is cleaner,
-            # albeit a little slower since it's not vectorized.
-            ll = np.array([self.loglikelihood(data, tau_i, self.W, V_jk, self.rowcol_args, col=idx) for tau_i, V_jk in zip(tau, V_j)])
-
-            # Renormalize by the EP approximation, if we had one
-            if mu_ep is not None:
-                ll -= norm.logpdf(tau, mu_ep[None], sigma_ep[None]).sum(axis=-1).sum(axis=-1)
-
-            # if idx == 0:
-            #     print('best proposal:')
-            #     print(tau[np.argmax(ll)])
-            #     print('ll: {}'.format(ll.max()))
-            assert len(ll) == V_j.shape[0]
-            assert len(ll.shape) == 1
-        else:
-            # Change from a vector to a T x D matrix
-            V_j = V_j.reshape((self.nembeds, self.ndepth)).T
-
-            # if idx == 0:
-            #     print('Proposal V_j:')
-            #     print(V_j)
-
-            # Calculate the mean effect
-            tau = (V_j[None] * self.W[:,None]).sum(axis=-1)
-            # if idx == 0:
-            #     print(tau)
-
-            # Get the black box log-likelihood
-            ll = self.loglikelihood(data, tau, self.W, V_j, self.rowcol_args, col=idx)
-
-            # Renormalize by the EP approximation, if we had one
-            if mu_ep is not None:
-                # Divide by the normal likelihood
-                # if len(V_j) == 1:
-                #     print('ll: {}'.format(ll))
-                #     print('normalizer: {}'.format(norm.logpdf(tau, mu_ep, sigma_ep).sum()))
-                #     print('tau: {}'.format(tau))
-                #     print('mu_ep: {}'.format(mu_ep))
-                #     print('sigma_ep: {}'.format(sigma_ep))
-                ll -= norm.logpdf(tau, mu_ep, sigma_ep).sum()
-        return ll
+            resample_args = [(self, j, data) for j in range(self.ncols)]
+            self.executor.map(lambda p: _resample_V_j(*p), resample_args)
 
     def logprob(self, data, **kwargs):
         # Calculate the mean effects for each V_j in the batch

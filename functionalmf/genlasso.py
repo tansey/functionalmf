@@ -1,12 +1,5 @@
 import abc
 import numpy as np
-import scipy as sp
-from scipy.stats import invgauss, norm, multivariate_normal, binom
-from scipy.sparse import csc_matrix, coo_matrix, issparse, eye as sparse_eye
-from sksparse.cholmod import cholesky
-from functionalmf.elliptical_slice import elliptical_slice_
-from functionalmf.utils import ilogit
-from functionalmf.fast_mvn import sample_mvn_from_precision
 
 
 class _BayesianModel(object):
