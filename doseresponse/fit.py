@@ -162,7 +162,7 @@ def init_model(Y, likelihood, args):
                                                           nthreads=args.nthreads,
                                                           W_true=W if args.features is not None and not args.sample_features else None, # Do not sample W if we have features
                                                           Row_constraints=Row_constraints, # Row feature constraints to [0,1]
-                                                          sharedprefix='test',
+                                                          sharedprefix=args.sharedprefix,
                                                           worker_init=worker_init,
                                                           worker_init_args=[args.sharedprefix]
                                                           )
