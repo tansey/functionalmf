@@ -637,11 +637,19 @@ class MultiprocessingContext:
         self.ncols, self.ndepth = self.V.shape[0], self.V.shape[1]
         self.nembeds = self.W.shape[1]
         self.nconstraints = self.Constraints_A.shape[0]
+
+# Initialize the worker model
+__worker_model = None
+def _worker_init(model, user_fn):
+    global __worker_model
+    __worker_model = model
+    model.load()
+    if user_fn is not None:
+        user_fn(model)
     
 def _resample_W_i(args):
-    self, i, data = args
-    if self.multiprocessing:
-        self.load()
+    i, data = args
+    self = __worker_model
 
     # Enforce the lower-triangular structure of W
     ndims = min(self.nembeds, i+1)
@@ -734,9 +742,8 @@ def _w_loglikelihood(w_i, ll_args):
     return ll
 
 def _resample_V_j(args):
-    self, j, data = args
-    if self.multiprocessing:
-        self.load()
+    j, data = args
+    self = __worker_model
         
     Constraints = _v_constraints(self)
     I_embed = eye(self.nembeds, format='csc')
@@ -882,7 +889,6 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                  multiprocessing=True, # If true, uses nthreads processes instead of threads (works better on AWS)
                  sharedprefix=None, # A unique prefix to prepend to all variable names
                  worker_init=None, # Optional initialization function for workers
-                 worker_init_args=None, # Optional initalization arguments for workers
                  **kwargs):
         super().__init__(nrows, ncols, ndepth, **kwargs)
         self.loglikelihood = loglikelihood
@@ -907,9 +913,6 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         # Are we doing multi-processing or multi-threading?
         self.multiprocessing = multiprocessing
         if self.multiprocessing:
-            # Create a process pool
-            self.executor = Pool(self.nthreads, initializer=worker_init, initargs=worker_init_args)
-
             # Use a unique prefix to prepend to all shared variables
             if sharedprefix is None:
                 import uuid
@@ -930,7 +933,11 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             if ep_approx is not None:
                 self.Mu_ep = _make_shared(self.Mu_ep, self.sharedprefix + 'Mu_ep')
                 self.Sigma_ep = _make_shared(self.Sigma_ep, self.sharedprefix + 'Sigma_ep')
+
+            # Create a process pool
+            self.executor = Pool(self.nthreads, initializer=_worker_init, initargs=(MultiprocessingContext(self),worker_init))
         else:
+            __worker_model = self
             self.executor = futures.ThreadPoolExecutor(max_workers=self.nthreads)
 
     def shutdown(self):
@@ -955,8 +962,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def _resample_W(self, data):
         # Sample each W_i independently (should be easier to satisfy the constraints)
         if self.multiprocessing:
-            context = MultiprocessingContext(self)
-            resample_args = [(context, i, data) for i in range(self.nrows)]
+            resample_args = [(i, data) for i in range(self.nrows)]
             self.executor.map(_resample_W_i, resample_args)
         else:
             resample_args = [(self, i, data) for i in range(self.nrows)]
@@ -965,11 +971,10 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def _resample_V(self, data):
         # Get the constraints given the current values of W
         if self.multiprocessing:
-            context = MultiprocessingContext(self)
-            resample_args = [(context, j, data) for j in range(self.ncols)]
+            resample_args = [(j, data) for j in range(self.ncols)]
             self.executor.map(_resample_V_j, resample_args)
         else:
-            resample_args = [(self, j, data) for j in range(self.ncols)]
+            resample_args = [(j, data) for j in range(self.ncols)]
             self.executor.map(lambda p: _resample_V_j(*p), resample_args)
 
     def logprob(self, data, **kwargs):

@@ -1,32 +1,22 @@
 '''Bayesian tensor filtering for dose-response modeling.'''
 import numpy as np
+from multiprocessing import RawArray
+import ctypes
 from empirical_bayes import estimate_likelihood
 from utils import load_data_as_pandas
-from functionalmf.factor import ConstrainedNonconjugateBayesianTensorFiltering
+from functionalmf.parallel import ParallelConstrainedNonconjugateBayesianTensorFiltering
 from functionalmf.utils import tensor_nmf, ep_from_mf, factor_pav, mse, mae
-import SharedArray as sa
 
-sharedprefix = None
-worker_model = None
-worker_Y = None
-worker_X = None
-worker_U = None
-def worker_init(model):
-    global worker_model
-    global worker_Y
-    global worker_X
-    global worker_U
-    worker_model = model
-    worker_Y = sa.attach(model.sharedprefix + 'Y_obs')
-    try:
-        worker_X = sa.attach(model.sharedprefix + 'X')
-        worker_U = sa.attach(model.sharedprefix + 'U')
-    except:
-        worker_X = None
-        worker_U = None
+# Global variables
+Y_shared_array = None
+Y_shape = None
+X_shared_array = None
+X_shape = None
+U_shared_array = None
+U_shape = None
 
-def rowcol_likelihood(_, WV, W, V, row=None, col=None):
-    Y_obs = worker_Y
+def rowcol_likelihood(_, WV, W, V, extra, row=None, col=None):
+    Y_obs = _numpy_Y()
     if row is not None:
         Y_obs = Y_obs[row]
     if col is not None:
@@ -35,20 +25,24 @@ def rowcol_likelihood(_, WV, W, V, row=None, col=None):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         z = np.nansum(likelihood.logpdf(Y_obs, WV[...,None]))
-    return z
-
-def rowcol_likelihood_with_X(_, WV, W, V, row=None, col=None):
-    z = rowcol_likelihood(_, WV, W, V, row=row, col=col)
-    if row is not None:
-        X = worker_X
-        U = worker_U
-        WU = W.dot(U[:,:W.shape[-1]].T)
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
+        if row is not None and extra is not None:
+            X, U = extra
+            WU = W.dot(U[:,:W.shape[-1]].T)
             z += np.nansum(X[row]*np.log(WU) + (1-X[row])*np.log(1-WU), axis=-1)
     return z
 
+def _numpy_Y():
+    return np.ctypeslib.as_array(Y_shared_array).reshape(Y_shape)
+
+def _numpy_XU():
+    return (np.ctypeslib.as_array(X_shared_array).reshape(X_shape),
+            np.ctypeslib.as_array(U_shared_array).reshape(U_shape))
+
+def _build_Y(Y):
+    global Y_shared_array
+    global Y_shape
+    Y_shared_array = RawArray(ctypes.c_double, Y.flatten())
+    Y_shape = Y.shape
 
 
 def init_model(Y, likelihood, args):
@@ -91,14 +85,20 @@ def init_model(Y, likelihood, args):
         #     W_without, _ = tensor_nmf(X_without[:,:,None], args.nembeds, V=U, fit_V=False, max_entry=0.999, verbose=False)
         X = X_with # Quick and dirty approach that just uses the samples with dose-response for now
 
-        # Create shared arrays
-        X_shared = sa.create(args.sharedprefix + 'X', X.shape)
-        X_shared[:] = X
-        X = X_shared
-        U_shared = sa.create(args.sharedprefix + 'U', U.shape)
-        U_shared[:] = U
-        U = U_shared
-        
+        # Convert U over to shared memory for efficiency
+        from multiprocessing import Array
+        import ctypes
+
+        # Convert W and V over to shared memory objects
+        global U_shared_array
+        global U_shape
+        global X_shared_array
+        global X_shape
+        U_shared_array = RawArray(ctypes.c_double, U.flatten())
+        X_shared_array = RawArray(ctypes.c_double, X.flatten())
+        U_shape = U.shape
+        X_shape = X.shape
+
         if args.sample_features:
             # Create constraints for WU to be in [0,1]
             Row_zero = np.concatenate([U,np.full((U.shape[0],1), 0)], axis=1)
@@ -106,12 +106,13 @@ def init_model(Y, likelihood, args):
             Row_constraints = np.concatenate([Row_zero, Row_one], axis=0)
 
             # Posterior samples
-            # U_samples = sa.create(args.sharedprefix + 'U_samples', (args.nsamples, U.shape[0], U.shape[1]))
             U_samples = np.zeros((args.nsamples, U.shape[0], U.shape[1]))
 
             from functionalmf.gass import gass
-            def U_step(model, _, step):
-                # TODO: Parallelize this
+            def U_step(model, Y_obs, step):
+                # Get the U and X arrays
+                U, X = _numpy_XU()
+
                 # Setup the [0,1] constraints
                 U_zero = np.concatenate([model.W,np.full((model.W.shape[0],1), 0)], axis=1)
                 U_one = np.concatenate([model.W*-1,np.full((model.W.shape[0],1), -1)], axis=1)
@@ -134,7 +135,9 @@ def init_model(Y, likelihood, args):
                 Row_zero = np.concatenate([U,np.full((U.shape[0],1), 0)], axis=1)
                 Row_one = np.concatenate([U*-1,np.full((U.shape[0],1), -1)], axis=1)
                 Row_constraints = np.concatenate([Row_zero, Row_one], axis=0)
-                model.Row_constraints[:] = Row_constraints
+                
+                global _Row_constraints_shared_array
+                _Row_constraints_shared_array[:] = Row_constraints.flatten()
 
                 # Save the U sample
                 if step >= args.nburn and (step-args.nburn) % args.nthin == 0:
@@ -142,12 +145,10 @@ def init_model(Y, likelihood, args):
                     U_samples[sidx] = U
 
             callback = U_step
-            loglikelihood = rowcol_likelihood_with_X
         else:
             Row_constraints = None
             callback = None
             U_samples = U[None]
-            loglikelihood = rowcol_likelihood_with_X
     else:
         # Initialize the model with a nonnegative matrix factorization on the clipped values
         print('Initializing dose-response embeddings via NMF')
@@ -155,7 +156,6 @@ def init_model(Y, likelihood, args):
         Row_constraints = None
         callback = None
         U_samples = None
-        loglikelihood = rowcol_likelihood
     
     # Sanity check that we're starting at valid points
     Mu = (W[:,None,None] * V[None]).sum(axis=-1)
@@ -167,8 +167,8 @@ def init_model(Y, likelihood, args):
 
 
     # Create the model
-    model = ConstrainedNonconjugateBayesianTensorFiltering(Y.shape[0], Y.shape[1], Y.shape[2],
-                                                          loglikelihood,
+    model = ParallelConstrainedNonconjugateBayesianTensorFiltering(Y.shape[0], Y.shape[1], Y.shape[2],
+                                                          rowcol_likelihood,
                                                           C,
                                                           nembeds=args.nembeds,
                                                           tf_order=args.tf_order,
@@ -177,8 +177,7 @@ def init_model(Y, likelihood, args):
                                                           nthreads=args.nthreads,
                                                           W_true=W if args.features is not None and not args.sample_features else None, # Do not sample W if we have features
                                                           Row_constraints=Row_constraints, # Row feature constraints to [0,1]
-                                                          sharedprefix=args.sharedprefix,
-                                                          worker_init=worker_init
+                                                          V_true=V # TEMP
                                                           )
 
     # Initialize at the NMF fit
@@ -201,7 +200,7 @@ if __name__ == '__main__':
 
     # Model settings
     parser.add_argument('--nembeds', type=int, default=5, help='Size of the embedding dimension.')
-    parser.add_argument('--tf_order', type=int, default=2, help='Smoothing order for the concentration dimension.')
+    parser.add_argument('--tf_order', type=int, default=0, help='Smoothing order for the concentration dimension.')
     parser.add_argument('--lam2', type=float, default=1e-1, help='The global shrinkage parameter.')
     parser.add_argument('--nbins', type=int, default=20, help='Number of bins to use for the empirical Bayes likelihood estimate.')
 
@@ -219,7 +218,6 @@ if __name__ == '__main__':
     # Side-information (row features)
     parser.add_argument('--features', help='An optional matrix of binary features for each row.')
     parser.add_argument('--sample_features', action='store_true', help='If specified, samples feature embeddings jointly with dose-response embeddings; otherwise, features are fixed at monotone NMF embedding values.')
-    parser.add_argument('--sharedprefix', default='dose', help='The shared memory prefix to prepend to all shared memory object names.')
 
     # Get the arguments from the command line
     args = parser.parse_args()
@@ -228,26 +226,6 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     import random
     random.seed(args.seed)
-
-    # In case we exited early, clean up stuff -- TOOD: make this automatic in BTF
-    try:
-        sa.delete(args.sharedprefix + 'X')
-        sa.delete(args.sharedprefix + 'U')
-        # sa.delete(args.sharedprefix + 'U_samples')
-        sa.delete(args.sharedprefix + 'Y_obs')
-        sa.delete(args.sharedprefix + 'W')
-        sa.delete(args.sharedprefix + 'V')
-        sa.delete(args.sharedprefix + 'Tau2')
-        sa.delete(args.sharedprefix + 'Constraints_A')
-        sa.delete(args.sharedprefix + 'Constraints_C')
-        sa.delete(args.sharedprefix + 'Row_constraints')
-        sa.delete(args.sharedprefix + 'Mu_ep')
-        sa.delete(args.sharedprefix + 'Sigma_ep')
-        sa.delete(args.sharedprefix + 'Delta_data')
-        sa.delete(args.sharedprefix + 'Delta_row')
-        sa.delete(args.sharedprefix + 'Delta_col')
-    except:
-        pass
 
     # Load the data
     df = load_data_as_pandas(args.data)
@@ -290,11 +268,9 @@ if __name__ == '__main__':
         Y = Y_candidate
         print(held_out)
 
-    # Create the Y in shared memory for parallel processing
-    Y_shared = sa.create(args.sharedprefix + 'Y_obs', Y.shape)
-    Y_shared[:] = Y
-    Y = Y_shared
-
+    # Create a shared memory array for Y
+    _build_Y(Y)
+    
     # Get the raw NMF as a baseline
     print('Fitting NMF')
     W_nmf, V_nmf = tensor_nmf(Y, args.nembeds, max_entry=0.999, verbose=False)
@@ -334,7 +310,7 @@ if __name__ == '__main__':
     #         plt.close()
 
     print('Running Gibbs sampler. Settings: burn={} thin={} samples={}'.format(args.nburn, args.nthin, args.nsamples))
-    results = model.run_gibbs(np.random.random(size=(3,5,2,2,2)), nburn=args.nburn,
+    results = model.run_gibbs(None, nburn=args.nburn,
                                  nthin=args.nthin,
                                  nsamples=args.nsamples,
                                  print_freq=1,
@@ -472,11 +448,13 @@ if __name__ == '__main__':
         if args.big_plot:
             plt.savefig(os.path.join(args.plotdir, 'all.pdf'), bbox_inches='tight')
 
-    # Clean up shared memory and shut down worker processes
-    model.shutdown()
-    sa.delete(args.sharedprefix + 'X')
-    sa.delete(args.sharedprefix + 'U')
-    # sa.delete(args.sharedprefix + 'U_samples')
-    sa.delete(args.sharedprefix + 'Y_obs')
+    if args.multiprocessing:
+        model.executor.close()
+    else:
+        # Kill the threadpool
+        model.executor.shutdown()
+
+
+
 
 
