@@ -623,6 +623,9 @@ class MultiprocessingContext:
         self.W = sa.attach(self.sharedprefix + 'W')
         self.V = sa.attach(self.sharedprefix + 'V')
         self.Tau2 = sa.attach(self.sharedprefix + 'Tau2')
+        self.sigma2 = sa.attach(self.sharedprefix + 'sigma2')
+        self.lam2 = sa.attach(self.sharedprefix + 'lam2')
+
         self.Constraints_A = sa.attach(self.sharedprefix + 'Constraints_A')
         self.Constraints_C = sa.attach(self.sharedprefix + 'Constraints_C')
         
@@ -637,6 +640,8 @@ class MultiprocessingContext:
         self.ncols, self.ndepth = self.V.shape[0], self.V.shape[1]
         self.nembeds = self.W.shape[1]
         self.nconstraints = self.Constraints_A.shape[0]
+    
+    
 
 # Initialize the worker model
 __worker_model = None
@@ -934,6 +939,12 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
                 self.Mu_ep = _make_shared(self.Mu_ep, self.sharedprefix + 'Mu_ep')
                 self.Sigma_ep = _make_shared(self.Sigma_ep, self.sharedprefix + 'Sigma_ep')
 
+            # Create shared memory for scalars
+            self.sigma2_shared = sa.create('shm://{}sigma2'.format(self.sharedprefix), 1)
+            self.lam2_shared = sa.create('shm://{}lam2'.format(self.sharedprefix), 1)
+            self.sigma2_shared[:] = self.sigma2
+            self.lam2_shared[:] = self.lam2
+
             # Create a process pool
             self.executor = Pool(self.nthreads, initializer=_worker_init, initargs=(MultiprocessingContext(self),worker_init))
         else:
@@ -946,6 +957,8 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             sa.delete(self.sharedprefix + 'W')
             sa.delete(self.sharedprefix + 'V')
             sa.delete(self.sharedprefix + 'Tau2')
+            sa.delete(self.sharedprefix + 'sigma2')
+            sa.delete(self.sharedprefix + 'lam2')
             sa.delete(self.sharedprefix + 'Constraints_A')
             sa.delete(self.sharedprefix + 'Constraints_C')
             sa.delete(self.sharedprefix + 'Delta_data')
@@ -982,6 +995,18 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         tau = (self.W[:,None,None] * self.V[None]).sum(axis=-1)
         return self.loglikelihood(data, tau, self.W, self.V, self.rowcol_args)
     
+    def _resample_sigma2(self):
+        super()._resample_sigma2()
+
+        if self.multiprocessing:
+            self.sigma2_shared[:] = self.sigma2
+
+    def _resample_lam2(self):
+        super()._resample_lam2()
+
+        if multiprocessing:
+            self.lam2_shared[:] = self.lam2
+
 
 
 
