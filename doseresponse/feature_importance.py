@@ -62,34 +62,35 @@ if __name__ == '__main__':
     print(feature_fits.iloc[np.argsort(feature_fits['r-value'].values)[:args.ntop]])
     print()
 
-    # Plot each hit
-    if not os.path.exists(args.plotdir):
-        os.makedirs(args.plotdir)
-    for idx in np.concatenate([np.argsort(feature_fits['r-value'].values)[-args.ntop:][::-1], np.argsort(feature_fits['r-value'].values)[:args.ntop]]):
-        with sns.axes_style('white'):
-            plt.rc('font', weight='bold')
-            plt.rc('grid', lw=3)
-            plt.rc('lines', lw=3)
-            matplotlib.rcParams['pdf.fonttype'] = 42
-            matplotlib.rcParams['ps.fonttype'] = 42
+    if args.plot:
+        # Plot each hit
+        if not os.path.exists(args.plotdir):
+            os.makedirs(args.plotdir)
+        for idx in np.concatenate([np.argsort(feature_fits['r-value'].values)[-args.ntop:][::-1], np.argsort(feature_fits['r-value'].values)[:args.ntop]]):
+            with sns.axes_style('white'):
+                plt.rc('font', weight='bold')
+                plt.rc('grid', lw=3)
+                plt.rc('lines', lw=3)
+                matplotlib.rcParams['pdf.fonttype'] = 42
+                matplotlib.rcParams['ps.fonttype'] = 42
 
-            # Get the indices for the AUC scores and the feature values
-            fidx, didx = idx // auc_scores.shape[1], idx % auc_scores.shape[1]
-            slope, intercept, r_value, p_value, stderr = feature_fits.iloc[idx]
-            feature, drug = feature_fits.index[idx]
+                # Get the indices for the AUC scores and the feature values
+                fidx, didx = idx // auc_scores.shape[1], idx % auc_scores.shape[1]
+                slope, intercept, r_value, p_value, stderr = feature_fits.iloc[idx]
+                feature, drug = feature_fits.index[idx]
 
-            plt.scatter(feature_probs[:,fidx], auc_scores[:,didx], color='gray', alpha=0.5)
-            plt.plot([0,1], [intercept, intercept+slope], color='red', lw=3, label='$r^2={:.2f}$'.format(r_value**2))
-            plt.xlabel('Biomarker probability', fontsize=18, weight='bold')
-            plt.ylabel('Dose-response AUC', fontsize=18, weight='bold')
-            plt.xlim([0,1])
-            plt.ylim([0,1])
+                plt.scatter(feature_probs[:,fidx], auc_scores[:,didx], color='gray', alpha=0.5)
+                plt.plot([0,1], [intercept, intercept+slope], color='red', lw=3, label='$r^2={:.2f}$'.format(r_value**2))
+                plt.xlabel('Biomarker probability', fontsize=18, weight='bold')
+                plt.ylabel('Dose-response AUC', fontsize=18, weight='bold')
+                plt.xlim([0,1])
+                plt.ylim([0,1])
 
-            legend_props = {'weight': 'bold', 'size': 14}
-            plt.legend(loc='upper right', prop=legend_props)
-            plt.title('{} + {}'.format(feature, drug), fontsize=22, weight='bold')
-            plt.savefig(os.path.join(args.plotdir, 'feature-importance-{}.pdf'.format(idx)), bbox_inches='tight')
-            plt.close()
+                legend_props = {'weight': 'bold', 'size': 14}
+                plt.legend(loc='upper right', prop=legend_props)
+                plt.title('{} + {}'.format(feature, drug), fontsize=22, weight='bold')
+                plt.savefig(os.path.join(args.plotdir, 'feature-importance-{}.pdf'.format(idx)), bbox_inches='tight')
+                plt.close()
 
 
 
