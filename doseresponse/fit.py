@@ -186,6 +186,12 @@ def init_model(Y, likelihood, args):
 
     return model, U_samples, callback
 
+def try_delete(name):
+    try:
+        sa.delete(name)
+    except:
+        pass
+
 if __name__ == '__main__':
     import os
     import argparse
@@ -234,26 +240,22 @@ if __name__ == '__main__':
     os.environ["OMP_NUM_THREADS"] = "1"
 
     # In case we exited early, clean up stuff -- TOOD: make this automatic in BTF
-    try:
-        sa.delete(args.sharedprefix + 'X')
-        sa.delete(args.sharedprefix + 'U')
-        # sa.delete(args.sharedprefix + 'U_samples')
-        sa.delete(args.sharedprefix + 'Y_obs')
-        sa.delete(args.sharedprefix + 'W')
-        sa.delete(args.sharedprefix + 'V')
-        sa.delete(args.sharedprefix + 'sigma2')
-        sa.delete(args.sharedprefix + 'lam2')
-        sa.delete(args.sharedprefix + 'Tau2')
-        sa.delete(args.sharedprefix + 'Constraints_A')
-        sa.delete(args.sharedprefix + 'Constraints_C')
-        sa.delete(args.sharedprefix + 'Row_constraints')
-        sa.delete(args.sharedprefix + 'Mu_ep')
-        sa.delete(args.sharedprefix + 'Sigma_ep')
-        sa.delete(args.sharedprefix + 'Delta_data')
-        sa.delete(args.sharedprefix + 'Delta_row')
-        sa.delete(args.sharedprefix + 'Delta_col')
-    except:
-        pass
+    try_delete(args.sharedprefix + 'X')
+    try_delete(args.sharedprefix + 'U')
+    try_delete(args.sharedprefix + 'Y_obs')
+    try_delete(args.sharedprefix + 'W')
+    try_delete(args.sharedprefix + 'V')
+    try_delete(args.sharedprefix + 'sigma2')
+    try_delete(args.sharedprefix + 'lam2')
+    try_delete(args.sharedprefix + 'Tau2')
+    try_delete(args.sharedprefix + 'Constraints_A')
+    try_delete(args.sharedprefix + 'Constraints_C')
+    try_delete(args.sharedprefix + 'Row_constraints')
+    try_delete(args.sharedprefix + 'Mu_ep')
+    try_delete(args.sharedprefix + 'Sigma_ep')
+    try_delete(args.sharedprefix + 'Delta_data')
+    try_delete(args.sharedprefix + 'Delta_row')
+    try_delete(args.sharedprefix + 'Delta_col')
 
     # Load the data
     df = load_data_as_pandas(args.data)
