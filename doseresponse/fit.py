@@ -192,6 +192,25 @@ def try_delete(name):
     except:
         pass
 
+def clean_up(sharedprefix):
+    # In case we exited early, clean up stuff -- TOOD: make this automatic in BTF
+    try_delete(args.sharedprefix + 'X')
+    try_delete(args.sharedprefix + 'U')
+    try_delete(args.sharedprefix + 'Y_obs')
+    try_delete(args.sharedprefix + 'W')
+    try_delete(args.sharedprefix + 'V')
+    try_delete(args.sharedprefix + 'sigma2')
+    try_delete(args.sharedprefix + 'lam2')
+    try_delete(args.sharedprefix + 'Tau2')
+    try_delete(args.sharedprefix + 'Constraints_A')
+    try_delete(args.sharedprefix + 'Constraints_C')
+    try_delete(args.sharedprefix + 'Row_constraints')
+    try_delete(args.sharedprefix + 'Mu_ep')
+    try_delete(args.sharedprefix + 'Sigma_ep')
+    try_delete(args.sharedprefix + 'Delta_data')
+    try_delete(args.sharedprefix + 'Delta_row')
+    try_delete(args.sharedprefix + 'Delta_col')
+
 if __name__ == '__main__':
     import os
     import argparse
@@ -239,23 +258,7 @@ if __name__ == '__main__':
     # https://stackoverflow.com/questions/59374939/aws-ec2-python-parallel-extremely-slow
     os.environ["OMP_NUM_THREADS"] = "1"
 
-    # In case we exited early, clean up stuff -- TOOD: make this automatic in BTF
-    try_delete(args.sharedprefix + 'X')
-    try_delete(args.sharedprefix + 'U')
-    try_delete(args.sharedprefix + 'Y_obs')
-    try_delete(args.sharedprefix + 'W')
-    try_delete(args.sharedprefix + 'V')
-    try_delete(args.sharedprefix + 'sigma2')
-    try_delete(args.sharedprefix + 'lam2')
-    try_delete(args.sharedprefix + 'Tau2')
-    try_delete(args.sharedprefix + 'Constraints_A')
-    try_delete(args.sharedprefix + 'Constraints_C')
-    try_delete(args.sharedprefix + 'Row_constraints')
-    try_delete(args.sharedprefix + 'Mu_ep')
-    try_delete(args.sharedprefix + 'Sigma_ep')
-    try_delete(args.sharedprefix + 'Delta_data')
-    try_delete(args.sharedprefix + 'Delta_row')
-    try_delete(args.sharedprefix + 'Delta_col')
+    clean_up(args.sharedprefix)
 
     # Load the data
     df = load_data_as_pandas(args.data)
@@ -356,9 +359,6 @@ if __name__ == '__main__':
     Mu_hat_mean = Mu_hat.mean(axis=0)
     Mu_hat_upper = np.percentile(Mu_hat, 95, axis=0)
     Mu_hat_lower = np.percentile(Mu_hat, 5, axis=0)
-    Y_hat = np.array([likelihood.sample(Mu_hat[None], size=[100]+list(Mu_hat.shape))]).reshape((-1,nrows,ncols,ndepth))
-    Y_hat_upper = np.percentile(Y_hat, 95, axis=0)
-    Y_hat_lower = np.percentile(Y_hat, 5, axis=0)
 
     # TODO -- calculate posterior predictive intervals
 
@@ -470,7 +470,12 @@ if __name__ == '__main__':
                 ax.set_xlim([X[0]-0.5,X[-1]+0.5])
                 ax.plot(X, Mu_hat_mean[i,j], color='orange')
                 ax.fill_between(X, Mu_hat_lower[i,j], Mu_hat_upper[i,j], color='orange', alpha=0.6)
-                ax.fill_between(X, Y_hat_lower[i,j], Y_hat_upper[i,j], color='orange', alpha=0.3)
+
+                # Posterior predictives
+                Y_hat = np.array([likelihood.sample(Mu_hat[None,i,j], size=[100,Mu_hat.shape[0],ndepth])]).reshape((-1,ndepth))
+                Y_hat_upper = np.percentile(Y_hat, 95, axis=0)
+                Y_hat_lower = np.percentile(Y_hat, 5, axis=0)
+                ax.fill_between(X, Y_hat_lower, Y_hat_upper, color='orange', alpha=0.3)
                 if args.nholdout > 0:
                     if np.any((held_out[0] == i) & (held_out[1] == j)):
                         ax.axvspan(X[0]-0.5, X[-1]+0.5, color='gray', alpha=0.3)
@@ -482,25 +487,5 @@ if __name__ == '__main__':
 
     # Clean up shared memory and shut down worker processes
     model.shutdown()
-    sa.delete(args.sharedprefix + 'X')
-    sa.delete(args.sharedprefix + 'U')
-    # sa.delete(args.sharedprefix + 'U_samples')
-    sa.delete(args.sharedprefix + 'Y_obs')
-
-    # sa.delete('dose' + 'X')
-    # sa.delete('dose' + 'U')
-    # sa.delete('dose' + 'Y_obs')
-    # sa.delete('dose' + 'W')
-    # sa.delete('dose' + 'V')
-    # sa.delete('dose' + 'sigma2')
-    # sa.delete('dose' + 'lam2')
-    # sa.delete('dose' + 'Tau2')
-    # sa.delete('dose' + 'Constraints_A')
-    # sa.delete('dose' + 'Constraints_C')
-    # sa.delete('dose' + 'Row_constraints')
-    # sa.delete('dose' + 'Mu_ep')
-    # sa.delete('dose' + 'Sigma_ep')
-    # sa.delete('dose' + 'Delta_data')
-    # sa.delete('dose' + 'Delta_row')
-    # sa.delete('dose' + 'Delta_col')
+    clean_up(args.sharedprefix)
 
