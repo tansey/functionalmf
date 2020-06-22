@@ -5,11 +5,11 @@ See `create_datasets.py` for details on how we preprocessed the dataset.
 
 See `benchmark.py` for full code on setting up both the negative binomial and Poisson models. The upshot here is that a negative binomial model with Polya-Gamma augmentation is unstable:
 
-![Visualization of the Negative Binomial functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/politics/plots/poisson-tensor-filtering-politics.png)
+![Visualization of the Negative Binomial functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/img/nb-tensor-filtering-politics.png)
 
 On the other hand, using a non-conjugate Poisson likelihood with GASS inference is better:
 
-![Visualization of the Poisson functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/politics/plots/poisson-tensor-filtering-politics.png)
+![Visualization of the Poisson functional matrix factorization](https://github.com/tansey/functionalmf/raw/master/img/poisson-tensor-filtering-politics.png)
 
 The Poisson model requires a bit more work to initialize, since it uses a Poisson tensor factorization algorithm to find a good starting point. It also mixes slower, but produces a better overall estimate in the end.
 
