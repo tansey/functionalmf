@@ -19,7 +19,6 @@ if __name__ == '__main__':
     parser.add_argument('--features', default='doseresponse/data/sim/features.csv', help='Matrix of binary features for each row.')
     parser.add_argument('--outdir', default='doseresponse/data/sim/', help='Directory where all results will be saved.')
     parser.add_argument('--plot', action='store_true', help='If true, the data and results will be plotted at the end.')
-    parser.add_argument('--big_plot', action='store_true', help='If true and plot is true, a single huge plot will be made.')
     parser.add_argument('--plotdir', default='doseresponse/plots/sim/', help='Directory where all results will be saved.')
     parser.add_argument('--ntop', type=int, default=20, help='The top sensitivity and resistance samples to report.')
 
@@ -44,16 +43,20 @@ if __name__ == '__main__':
     from scipy.stats import linregress
     index = []
     feature_fits = []
+    scatter_points = {}
     for fname, x in zip(features, feature_probs.T):
         for dname, y in zip(drugs, auc_scores.T):
+            # Filter potentially spurious results
+            if x.std() < 0.05 or y.std() < 0.05:
+                continue
+            print(fname, dname, x.std(), y.std())
             index.append((fname, dname))
             feature_fits.append(linregress(x,y))
+            scatter_points[(fname, dname)] = (x, y)
 
     feature_fits = pd.DataFrame(feature_fits,
                                 index=index,
                                 columns=['slope', 'intercept', 'r-value', 'p-value', 'stderr'])
-
-    print(feature_fits.describe())
 
     print('Top {} resistant:'.format(args.ntop))
     print(feature_fits.iloc[np.argsort(feature_fits['r-value'].values)[-args.ntop:][::-1]])
@@ -71,15 +74,19 @@ if __name__ == '__main__':
                 plt.rc('font', weight='bold')
                 plt.rc('grid', lw=3)
                 plt.rc('lines', lw=3)
+                plt.rc('xtick', labelsize=14)    # fontsize of the tick labels
+                plt.rc('ytick', labelsize=14)    # fontsize of the tick labels
                 matplotlib.rcParams['pdf.fonttype'] = 42
                 matplotlib.rcParams['ps.fonttype'] = 42
 
                 # Get the indices for the AUC scores and the feature values
-                fidx, didx = idx // auc_scores.shape[1], idx % auc_scores.shape[1]
+                # fidx, didx = idx // auc_scores.shape[1], idx % auc_scores.shape[1]
+                # x, y = feature_probs[:,fidx], auc_scores[:,didx]
                 slope, intercept, r_value, p_value, stderr = feature_fits.iloc[idx]
                 feature, drug = feature_fits.index[idx]
+                x, y = scatter_points[(feature, drug)]
 
-                plt.scatter(feature_probs[:,fidx], auc_scores[:,didx], color='gray', alpha=0.5)
+                plt.scatter(x, y, color='gray', alpha=0.5)
                 plt.plot([0,1], [intercept, intercept+slope], color='red', lw=3, label='$r^2={:.2f}$'.format(r_value**2))
                 plt.xlabel('Biomarker probability', fontsize=18, weight='bold')
                 plt.ylabel('Dose-response AUC', fontsize=18, weight='bold')
@@ -89,7 +96,7 @@ if __name__ == '__main__':
                 legend_props = {'weight': 'bold', 'size': 14}
                 plt.legend(loc='upper right', prop=legend_props)
                 plt.title('{} + {}'.format(feature, drug), fontsize=22, weight='bold')
-                plt.savefig(os.path.join(args.plotdir, 'feature-importance-{}.pdf'.format(idx)), bbox_inches='tight')
+                plt.savefig(os.path.join(args.plotdir, 'feature-importance-{}-{}.pdf'.format(feature.lower(), drug.lower())), bbox_inches='tight')
                 plt.close()
 
 
