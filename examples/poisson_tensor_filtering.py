@@ -136,19 +136,19 @@ if __name__ == '__main__':
         # Ground truth drawn from the model
         W_true, V_true = create_piecewise_constant()
 
+        # Get the true mean values
+        Mu = np.einsum('nk,mtk->nmt', W_true, V_true)
+
+        # Generate the data
+        Y = np.random.poisson(Mu[...,None], size=(nrows, ncols, ndepth, nreplicates)).astype(float)
+
+        # Hold out some curves
+        Y_missing = Y.copy()
+        Y_missing[:3,:3] = np.nan
+
         for nembeds in nembeds_options:
             print('Seed {} d={}'.format(seed, nembeds))
             models = []
-
-            # Get the true mean values
-            Mu = np.einsum('nk,mtk->nmt', W_true, V_true)
-
-            # Generate the data
-            Y = np.random.poisson(Mu[...,None], size=(nrows, ncols, ndepth, nreplicates)).astype(float)
-
-            # Hold out some curves
-            Y_missing = Y.copy()
-            Y_missing[:3,:3] = np.nan
 
             ############### Setup the NMF baseline ###############
             W_nmf, V_nmf = tensor_nmf(Y_missing, nembeds)
@@ -169,7 +169,7 @@ if __name__ == '__main__':
                 import warnings
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
-                    Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
+                    Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=nthreads)
                 Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
                 models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
             # except:
