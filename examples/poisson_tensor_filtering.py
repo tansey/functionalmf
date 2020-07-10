@@ -127,153 +127,156 @@ if __name__ == '__main__':
     nsamples = 1000
     nchains = 1
     nembeds_options = [2,3,5,10]
-    nthreads = 1 if len(sys.argv) == 1 else int(sys.argv[1])
+    # nthreads = 1 if len(sys.argv) == 1 else int(sys.argv[1])
+    nthreads = 3
+    nembeds = int(sys.argv[1])
+    seed = int(sys.argv[2])
     
-    aggregate_performance = {nembeds: [] for nembeds in nembeds_options}
-    for seed in [1,2,3,4,5]:
-        np.random.seed(seed)
+    # aggregate_performance = {nembeds: [] for nembeds in nembeds_options}
+    # for seed in [1,2,3,4,5]:
+    np.random.seed(seed)
 
-        # Ground truth drawn from the model
-        W_true, V_true = create_piecewise_constant()
+    # Ground truth drawn from the model
+    W_true, V_true = create_piecewise_constant()
 
-        # Get the true mean values
-        Mu = np.einsum('nk,mtk->nmt', W_true, V_true)
+    # Get the true mean values
+    Mu = np.einsum('nk,mtk->nmt', W_true, V_true)
 
-        # Generate the data
-        Y = np.random.poisson(Mu[...,None], size=(nrows, ncols, ndepth, nreplicates)).astype(float)
+    # Generate the data
+    Y = np.random.poisson(Mu[...,None], size=(nrows, ncols, ndepth, nreplicates)).astype(float)
 
-        # Hold out some curves
-        Y_missing = Y.copy()
-        Y_missing[:3,:3] = np.nan
+    # Hold out some curves
+    Y_missing = Y.copy()
+    Y_missing[:3,:3] = np.nan
 
-        for nembeds in nembeds_options:
-            print('Seed {} d={}'.format(seed, nembeds))
-            models = []
+    # for nembeds in nembeds_options:
+    print('Seed {} d={}'.format(seed, nembeds))
+    models = []
 
-            ############### Setup the NMF baseline ###############
-            W_nmf, V_nmf = tensor_nmf(Y_missing, nembeds)
-            Mu_nmf = (W_nmf[:,None,None] * V_nmf[None]).sum(axis=-1)
-            models.append({'name': 'NMF', 'fit': Mu_nmf, 'samples': Mu_nmf[None], 'file': 'nmf.npy'})
-            ###########################################################################
+    ############### Setup the NMF baseline ###############
+    W_nmf, V_nmf = tensor_nmf(Y_missing, nembeds)
+    Mu_nmf = (W_nmf[:,None,None] * V_nmf[None]).sum(axis=-1)
+    models.append({'name': 'NMF', 'fit': Mu_nmf, 'samples': Mu_nmf[None], 'file': 'nmf.npy'})
+    ###########################################################################
 
-            ############### Setup the PGDS baseline ###############
-            print('Fitting PGDS')
-            # try:
-            for tau in [0.25, 0.5, 1]:
-                # If you have the Poisson-gamma dynamical system of Schein et al installed,
-                # add that baseline comparison
-                # sys.path.append('../apf/src/')
-                from functionalmf.pgds import fit_pgds
-                # Fit the PGDS model
-                print('\tk={} tau={}'.format(nembeds, tau))
-                import warnings
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", category=RuntimeWarning)
-                    Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
-                Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
-                models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
-            # except:
-            #     print('Could not run PGDS, bailing.')
-            #     Mu_pgds_mean = Y_missing
-            #     pass
+    ############### Setup the PGDS baseline ###############
+    print('Fitting PGDS')
+    # try:
+    for tau in [0.25, 0.5, 1]:
+        # If you have the Poisson-gamma dynamical system of Schein et al installed,
+        # add that baseline comparison
+        # sys.path.append('../apf/src/')
+        from functionalmf.pgds import fit_pgds
+        # Fit the PGDS model
+        print('\tk={} tau={}'.format(nembeds, tau))
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
+        Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
+        models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
+    # except:
+    #     print('Could not run PGDS, bailing.')
+    #     Mu_pgds_mean = Y_missing
+    #     pass
 
-            ############### Setup the Negative Binomial model ###############
-            tf_order = 0
-            nbinom_model = NegativeBinomialBayesianTensorFiltering(nrows, ncols, ndepth,
-                                                                      nembeds=nembeds, tf_order=tf_order,
-                                                                      sigma2_init=1, nthreads=nthreads,
-                                                                      lam2_init=0.1, nu2_init=1)
-            results = nbinom_model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=1000, verbose=True)
-            Ws = results['W']
-            Vs = results['V']
-            Rs = results['R']
-            Tau2s = results['Tau2']
-            lam2s = results['lam2']
-            sigma2s = results['sigma2']
+    ############### Setup the Negative Binomial model ###############
+    tf_order = 0
+    nbinom_model = NegativeBinomialBayesianTensorFiltering(nrows, ncols, ndepth,
+                                                              nembeds=nembeds, tf_order=tf_order,
+                                                              sigma2_init=1, nthreads=nthreads,
+                                                              lam2_init=0.1, nu2_init=1)
+    results = nbinom_model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=1000, verbose=True)
+    Ws = results['W']
+    Vs = results['V']
+    Rs = results['R']
+    Tau2s = results['Tau2']
+    lam2s = results['lam2']
+    sigma2s = results['sigma2']
 
-            # Get the Bayes estimate
-            Ps = ilogit(np.einsum('znk,zmtk->znmt', Ws, Vs).clip(-10,10))
-            Mu_nbinom = Rs * Ps / (1 - Ps)
-            Mu_nbinom_mean = Mu_nbinom.mean(axis=0)
-            Mu_nbinom_upper = np.percentile(Mu_nbinom, 95, axis=0)
-            Mu_nbinom_lower = np.percentile(Mu_nbinom, 5, axis=0)
-            models.append({'name': 'NB-BTF', 'fit': Mu_nbinom_mean, 'samples': Mu_nbinom, 'file': 'btf_nbinom.npy'})
-            ###########################################################################
+    # Get the Bayes estimate
+    Ps = ilogit(np.einsum('znk,zmtk->znmt', Ws, Vs).clip(-10,10))
+    Mu_nbinom = Rs * Ps / (1 - Ps)
+    Mu_nbinom_mean = Mu_nbinom.mean(axis=0)
+    Mu_nbinom_upper = np.percentile(Mu_nbinom, 95, axis=0)
+    Mu_nbinom_lower = np.percentile(Mu_nbinom, 5, axis=0)
+    models.append({'name': 'NB-BTF', 'fit': Mu_nbinom_mean, 'samples': Mu_nbinom, 'file': 'btf_nbinom.npy'})
+    ###########################################################################
 
-            ############### Setup the Poisson BTF model ###############
-            # Sample from the prior
-            model = init_model(nembeds, sharedprefix='pbtf-{}-{}'.format(seed, nembeds), nthreads=nthreads)
+    ############### Setup the Poisson BTF model ###############
+    # Sample from the prior
+    model = init_model(nembeds, sharedprefix='pbtf-{}-{}'.format(seed, nembeds), nthreads=nthreads)
 
-            # Reinitialize the parts we're going to sample
-            setup_sampler(model, Y_missing)
+    # Reinitialize the parts we're going to sample
+    setup_sampler(model, Y_missing)
 
-            # Save the initial model values
-            X = np.arange(ndepth)
-            Mu_init = np.matmul(model.W[None], np.transpose(model.V, [0,2,1])).transpose([1,0,2])
+    # Save the initial model values
+    X = np.arange(ndepth)
+    Mu_init = np.matmul(model.W[None], np.transpose(model.V, [0,2,1])).transpose([1,0,2])
 
-            ####### Run the Gibbs sampler #######
-            results = model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=1000, verbose=True)
-            for chain in range(nchains-1):
-                print('Chain {}'.format(chain+2))
-                setup_sampler(model, Y)
-                chain_results = model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples)
-                for key, val in chain_results.items():
-                    results[key] = np.concatenate([results[key], val], axis=0)
-            Ws = results['W']
-            Vs = results['V']
-            Tau2s = results['Tau2']
-            lam2s = results['lam2']
-            sigma2s = results['sigma2']
+    ####### Run the Gibbs sampler #######
+    results = model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=1000, verbose=True)
+    for chain in range(nchains-1):
+        print('Chain {}'.format(chain+2))
+        setup_sampler(model, Y)
+        chain_results = model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples)
+        for key, val in chain_results.items():
+            results[key] = np.concatenate([results[key], val], axis=0)
+    Ws = results['W']
+    Vs = results['V']
+    Tau2s = results['Tau2']
+    lam2s = results['lam2']
+    sigma2s = results['sigma2']
 
-            # Get the Bayes estimate
-            Mu_hat = np.matmul(Ws[:,None], np.transpose(Vs, [0,1,3,2])).transpose([0,2,1,3])
-            Mu_hat_mean = Mu_hat.mean(axis=0)
-            Mu_hat_upper = np.percentile(Mu_hat, 95, axis=0)
-            Mu_hat_lower = np.percentile(Mu_hat, 5, axis=0)
-            models.append({'name': 'Poisson-BTF', 'fit': Mu_hat_mean, 'samples': Mu_hat, 'file': 'btf_poisson.npy'})
-            ###########################################################################
-            
+    # Get the Bayes estimate
+    Mu_hat = np.matmul(Ws[:,None], np.transpose(Vs, [0,1,3,2])).transpose([0,2,1,3])
+    Mu_hat_mean = Mu_hat.mean(axis=0)
+    Mu_hat_upper = np.percentile(Mu_hat, 95, axis=0)
+    Mu_hat_lower = np.percentile(Mu_hat, 5, axis=0)
+    models.append({'name': 'Poisson-BTF', 'fit': Mu_hat_mean, 'samples': Mu_hat, 'file': 'btf_poisson.npy'})
+    ###########################################################################
+    
 
-            metrics = [#{'name': 'MAE (all data)',  'fun': lambda Y, Mu, pred, samples: mae(Y, pred[...,None])},
-                       #{'name': 'RMSE (all data)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y, pred[...,None]))},
-                       #{'name': 'NLL (all data)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y, pred[...,None]))},
-                       {'name': 'MAE (held out)',  'fun': lambda Y, Mu, pred, samples: mae(Y[:3,:3], pred[:3,:3,...,None])},
-                       {'name': 'RMSE (held out)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y[:3,:3], pred[:3,:3,...,None]))},
-                       {'name': 'NLL (held out)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y[:3,:3], pred[:3,:3,...,None]))},
-                       {'name': 'MAE (true rate)', 'fun': lambda Y, Mu, pred, samples: mae(Mu, pred)},
-                       {'name': 'RMSE (true rate)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Mu, pred))},
-                       {'name': '50% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 50)},
-                       {'name': '75% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 75)},
-                       {'name': '90% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 90)},
-                       {'name': '95% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 95)}]
-            nmetrics = len(metrics)
-            nmodels = len(models)
+    metrics = [#{'name': 'MAE (all data)',  'fun': lambda Y, Mu, pred, samples: mae(Y, pred[...,None])},
+               #{'name': 'RMSE (all data)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y, pred[...,None]))},
+               #{'name': 'NLL (all data)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y, pred[...,None]))},
+               {'name': 'MAE (held out)',  'fun': lambda Y, Mu, pred, samples: mae(Y[:3,:3], pred[:3,:3,...,None])},
+               {'name': 'RMSE (held out)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y[:3,:3], pred[:3,:3,...,None]))},
+               {'name': 'NLL (held out)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y[:3,:3], pred[:3,:3,...,None]))},
+               {'name': 'MAE (true rate)', 'fun': lambda Y, Mu, pred, samples: mae(Mu, pred)},
+               {'name': 'RMSE (true rate)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Mu, pred))},
+               {'name': '50% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 50)},
+               {'name': '75% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 75)},
+               {'name': '90% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 90)},
+               {'name': '95% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 95)}]
+    nmetrics = len(metrics)
+    nmodels = len(models)
 
-            metric_results = np.zeros((nmetrics, nmodels))
-            for metidx, metric in enumerate(metrics):
-                metric_results[metidx] = [metric['fun'](Y, Mu, m['fit'], m['samples']) for m in models]
+    metric_results = np.zeros((nmetrics, nmodels))
+    for metidx, metric in enumerate(metrics):
+        metric_results[metidx] = [metric['fun'](Y, Mu, m['fit'], m['samples']) for m in models]
 
-            print('Saving results to file')
-            outdir = os.path.join('data/poisson_tensor_filtering/', 'seed{}-nembeds{}'.format(seed, nembeds))
-            if not os.path.exists(outdir):
-                os.makedirs(outdir)
-            np.save(os.path.join(outdir, 'y'), Y)
-            np.save(os.path.join(outdir, 'mu'), Mu)
-            [np.save(os.path.join(outdir, m['file'].replace('.npy', '_fit.npy')), m['fit']) for m in models]
-            [np.save(os.path.join(outdir, m['file'].replace('.npy', '_samples.npy')), m['samples']) for m in models]
-            print()
+    print('Saving results to file')
+    outdir = os.path.join('data/poisson_tensor_filtering/', 'seed{}-nembeds{}'.format(seed, nembeds))
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    np.save(os.path.join(outdir, 'y'), Y)
+    np.save(os.path.join(outdir, 'mu'), Mu)
+    [np.save(os.path.join(outdir, m['file'].replace('.npy', '_fit.npy')), m['fit']) for m in models]
+    [np.save(os.path.join(outdir, m['file'].replace('.npy', '_samples.npy')), m['samples']) for m in models]
+    print()
 
-            model.shutdown()
+    model.shutdown()
 
-            aggregate_performance[nembeds].append(metric_results)
+    #         aggregate_performance[nembeds].append(metric_results)
 
-    for nembeds in nembeds_options:
-        print('d={}'.format(nembeds))
-        nembeds_results = np.array(aggregate_performance[nembeds]).mean(axis=0)
-        print(('{:<18}'*(nmetrics+1)).format(*(['Model'] + [m['name'] for m in metrics])))
-        for i, m in enumerate(models):
-            model_results = ''.join(['{:<18.2f}'.format(r) for r in nembeds_results[:,i]])
-            print('{:<18}'.format(m['name']) + model_results)
+    # for nembeds in nembeds_options:
+    #     print('d={}'.format(nembeds))
+    #     nembeds_results = np.array(aggregate_performance[nembeds]).mean(axis=0)
+    #     print(('{:<18}'*(nmetrics+1)).format(*(['Model'] + [m['name'] for m in metrics])))
+    #     for i, m in enumerate(models):
+    #         model_results = ''.join(['{:<18.2f}'.format(r) for r in nembeds_results[:,i]])
+    #         print('{:<18}'.format(m['name']) + model_results)
 
     ###### Plot the true curves, the noisy observations, and the fits ######
     # print('Plotting results')
