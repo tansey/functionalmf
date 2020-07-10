@@ -122,9 +122,9 @@ def clean_up(sharedprefix):
 
 if __name__ == '__main__':
     import sys
-    nburn = 50
+    nburn = 5000
     nthin = 5
-    nsamples = 10
+    nsamples = 1000
     nchains = 1
     nembeds_options = [2,3,5,10]
     nthreads = 1 if len(sys.argv) == 1 else int(sys.argv[1])
