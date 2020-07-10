@@ -158,24 +158,24 @@ if __name__ == '__main__':
 
             ############### Setup the PGDS baseline ###############
             print('Fitting PGDS')
-            try:
-                for tau in [0.25, 0.5, 1]:
-                    # If you have the Poisson-gamma dynamical system of Schein et al installed,
-                    # add that baseline comparison
-                    # sys.path.append('../apf/src/')
-                    from functionalmf.pgds import fit_pgds
-                    # Fit the PGDS model
-                    print('Fitting to full data with k={}'.format(nembeds))
-                    import warnings
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", category=RuntimeWarning)
-                        Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
-                    Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
-                    models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
-            except:
-                print('Could not run PGDS, bailing.')
-                Mu_pgds_mean = Y_missing
-                pass
+            # try:
+            for tau in [0.25, 0.5, 1]:
+                # If you have the Poisson-gamma dynamical system of Schein et al installed,
+                # add that baseline comparison
+                # sys.path.append('../apf/src/')
+                from functionalmf.pgds import fit_pgds
+                # Fit the PGDS model
+                print('Fitting to full data with k={}'.format(nembeds))
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
+                Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
+                models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
+            # except:
+            #     print('Could not run PGDS, bailing.')
+            #     Mu_pgds_mean = Y_missing
+            #     pass
 
             ############### Setup the Negative Binomial model ###############
             tf_order = 0
