@@ -181,7 +181,7 @@ if __name__ == '__main__':
             tf_order = 0
             nbinom_model = NegativeBinomialBayesianTensorFiltering(nrows, ncols, ndepth,
                                                                       nembeds=nembeds, tf_order=tf_order,
-                                                                      sigma2_init=1, nthreads=nthreads,
+                                                                      sigma2_init=1, nthreads=1,
                                                                       lam2_init=0.1, nu2_init=1)
             results = nbinom_model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=1000, verbose=True)
             Ws = results['W']
