@@ -165,11 +165,11 @@ if __name__ == '__main__':
                 # sys.path.append('../apf/src/')
                 from functionalmf.pgds import fit_pgds
                 # Fit the PGDS model
-                print('Fitting to full data with k={}'.format(nembeds))
+                print('\tk={} tau={}'.format(nembeds, tau))
                 import warnings
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
-                    Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=nthreads)
+                    Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
                 Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
                 models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
             # except:
