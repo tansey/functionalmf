@@ -95,8 +95,8 @@ if __name__ == '__main__':
 
                 legend_props = {'weight': 'bold', 'size': 14}
                 plt.legend(loc='upper right', prop=legend_props)
-                plt.title('{} + {}'.format(feature, drug), fontsize=22, weight='bold')
-                plt.savefig(os.path.join(args.plotdir, 'feature-importance-{}-{}.pdf'.format(feature.lower(), drug.lower())), bbox_inches='tight')
+                # plt.title('{}\n+\n{}'.format(feature, drug), fontsize=22, weight='bold')
+                plt.savefig(os.path.join(args.plotdir, 'feature-importance-{}-{}.pdf'.format(feature.lower().replace(' ', '-'), drug.lower())), bbox_inches='tight')
                 plt.close()
 
 

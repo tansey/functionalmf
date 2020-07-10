@@ -4,11 +4,24 @@
 % the necessary inputs for running the code that analytically marginalizes
 % missing data.
 
+octave = 1;
+if octave
+    % Octave disable warnings
+    warning('off', 'all');
+
+    % Use the statistics package if in octave
+    pkg load statistics
+
+    % Turn off the pager if in octave
+    more off
+end
+
 load flu_US_states_train;
 
 month_names = {'January','February','March','April','May','June','July','August','September','October','November','December'};
 
 times = datenum(dates);
+
 [years months days] = datevec(dates);
 
 flu = data';
@@ -31,14 +44,12 @@ for i=1:q
     vars(i) = var(flu(i,start_dates(i):end));
 end
 
-flu = flu./sqrt(max(vars));
+flu = log(flu);
 
 y=zeros(q,T);
 for i=1:q
     y(i,start_dates(i):end) = flu(i,start_dates(i):end);
 end
-
-y = 1.75*y;
 
 tmp = cumsum(sum(y,1));
 tmp = find(tmp==0);
@@ -47,9 +58,11 @@ if ~isempty(tmp)
     y = y(:,start_time:end-1);
 end
 
+y(find(isnan(y))) = 0;
 inds_y = ones(size(y));
 inds_y(find(y==0)) = 0;
 inds_y = inds_y > 0;
+
 
 [p N] = size(y);
 
@@ -65,6 +78,7 @@ for ii=1:N
         K(ii,jj) = d*exp(-c*(dist_ii_jj^2));
     end
 end
+
 K = K + diag(r*ones(1,N));
 invK = inv(K);
 logdetK = 2*sum(log(diag(chol(K))));
@@ -95,12 +109,11 @@ settings.inds_y = inds_y;
 
 BNP_covreg_varinds(y,prior_params,settings,0);
 
-
 latent_mean = settings.latent_mean;
-% inds2impute = settings.inds2impute;
 inds2impute = ~settings.inds_y;
 
-sampleEvery = settings.storeEvery;
+Nburn = settings.saveMin - 1;
+Nsamples = floor((settings.Niter-Nburn)/settings.storeEvery);
 var_mean = zeros(p,p,N);
 var_var = zeros(p,p,N);
 var_u = zeros(p,p,N);
@@ -109,19 +122,23 @@ mu_mean = zeros(p,N);
 mu_var = zeros(p,N);
 mu_u = zeros(p,N);
 mu_l = zeros(p,N);
+y_mean = zeros(p, N);
+y_u = zeros(p, N);
+y_l = zeros(p, N);
 
-cov_true = true_params.cov_true;
-mu_true = true_params.mu;
-
+% TEMP: 1:N
 for tt=1:N
-    theta_zeta_tt = zeros(p,k,(Niter-Nburn)/sampleEvery);
-    var_tt = zeros(p,p,(Niter-Nburn)/sampleEvery);
-    mu_tt = zeros(p,(Niter-Nburn)/sampleEvery);
+    printf("Compiling week %d/%d\n", tt,N);
+    theta_zeta_tt = zeros(p,settings.k,Nsamples);
+    var_tt = zeros(p,p,Nsamples);
+    mu_tt = zeros(p,Nsamples);
+    y_tt = zeros(p,Nsamples*100);
     m = 1;
-    for nn=Nburn+1:sampleEvery:Niter
-        n = nn+saveEvery-1;
-        if rem(n,saveEvery)==0 & n<=Niter
-            filename = [saveDir '/BNP_covreg_statsiter' num2str(n) 'trial' num2str(trial) '.mat'];
+    for nn=Nburn+1:settings.storeEvery:settings.Niter
+        n = nn+settings.saveEvery-1;
+        printf("n=%d nn=%d\n", n, nn);
+        if rem(n,settings.saveEvery)==0 & n<=settings.Niter
+            filename = [settings.saveDir '/BNP_covreg_statsiter' num2str(n) 'trial' num2str(settings.trial) '.mat'];
             load(filename)
             store_count = 1;
         end
@@ -129,6 +146,9 @@ for tt=1:N
         var_tt(:,:,m) = Stats(store_count).theta*Stats(store_count).zeta(:,:,tt)*Stats(store_count).zeta(:,:,tt)'*Stats(store_count).theta'...
             + diag(1./Stats(store_count).invSig_vec);
         mu_tt(:,m) = Stats(store_count).theta*Stats(store_count).zeta(:,:,tt)*Stats(store_count).psi(:,tt);
+
+        % Sample 100 MVN samples
+        y_tt(:,(m-1)*100+1:m*100) = mvnrnd(mu_tt(:,m), var_tt(:,:,m), 100)';
         
         m = m + 1;
         store_count = store_count + 1;
@@ -139,6 +159,9 @@ for tt=1:N
     
     mu_mean(:,tt) = mean(mu_tt,2);
     mu_var(:,tt) = var(mu_tt,0,2);
+
+    y_mean(:,tt) = mean(y_tt,2);
+    y_var(:,tt) = var(y_tt,0,2);
     
     for pp=1:p
         for jj=pp:p
@@ -147,13 +170,35 @@ for tt=1:N
         if latent_mean
             [mu_u(pp,tt) mu_l(pp,tt)] = calculate_hpd(mu_tt(pp,:),0.95);
         end
+        [y_u(pp,tt), y_l(pp,tt)] = calculate_hpd(y_tt(pp,:),0.95);
     end
     
     if ~rem(tt,100)
         display(num2str(tt))
     end
-    
 end
 
-writematrix(mu_mean, [saveDir '/mu_mean.csv']);
+if ~octave
+    % writematrix(var_mean, [settings.saveDir '/bnpcovreg_var_mean.csv']);
+    % writematrix(var_u, [settings.saveDir '/bnpcovreg_var_upper.csv']);
+    % writematrix(var_l, [settings.saveDir '/bnpcovreg_var_lower.csv']);
+    writematrix(mu_mean, [settings.saveDir '/bnpcovreg_mu_mean.csv']);
+    writematrix(mu_u, [settings.saveDir '/bnpcovreg_mu_upper.csv']);
+    writematrix(mu_l, [settings.saveDir '/bnpcovreg_mu_lower.csv']);
+    writematrix(y_mean, [settings.saveDir '/bnpcovreg_y_mean.csv']);
+    writematrix(y_u, [settings.saveDir '/bnpcovreg_y_upper.csv']);
+    writematrix(y_l, [settings.saveDir '/bnpcovreg_y_lower.csv']);
+end
+
+if octave
+    save('-ascii', var_mean, [settings.saveDir '/bnpcovreg_var_mean.csv']);
+    save([settings.saveDir '/bnpcovreg_var_upper.csv'], var_u);
+    save([settings.saveDir '/bnpcovreg_var_lower.csv'], var_l);
+    csvwrite([settings.saveDir '/bnpcovreg_mu_mean.csv'], mu_mean);
+    csvwrite([settings.saveDir '/bnpcovreg_mu_upper.csv'], mu_u);
+    csvwrite([settings.saveDir '/bnpcovreg_mu_lower.csv'], mu_l);
+    csvwrite([settings.saveDir '/bnpcovreg_y_mean.csv'], y_mean);
+    csvwrite([settings.saveDir '/bnpcovreg_y_upper.csv'], y_u);
+    csvwrite([settings.saveDir '/bnpcovreg_y_lower.csv'], y_l);
+end
 

@@ -6,6 +6,7 @@ Run this before running runstuff_varinds_flu_states.m.
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import seaborn as sns
 import datetime
 import numpy as np
 import os
@@ -24,46 +25,56 @@ to_hold = np.load('held_out_years.npy')
 
 
 nburn = 100
-nthin = 1
+nthin = 100
 nsamples = 100
 
 nrows, ncols, ndepth = Y.shape
-model = GaussianBayesianTensorFiltering(nrows, ncols, ndepth, nembeds=10, tf_order=2, sigma2_init=1, nthreads=1, lam2_init=0.1, nu2_init=1)
 
-####### Run the Gibbs sampler #######
-print('Running Gibbs sampler')
-results = model.run_gibbs(Y_train, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=50, verbose=True)
-Ws = results['W']
-Vs = results['V']
-Tau2s = results['Tau2']
-lam2s = results['lam2']
-sigma2s = results['sigma2']
-nu2s = results['nu2']
+for nembeds in [5,10]:
+    model = GaussianBayesianTensorFiltering(nrows, ncols, ndepth, nembeds=nembeds, tf_order=2, sigma2_init=1, nthreads=1, lam2_init=0.1, nu2_init=1)
 
-# Look at just the first 100 instead of 1000
-# Ws, Vs, Tau2s, lam2s, sigma2s, nu2s = Ws[:100], Vs[:100], Tau2s[:100], lam2s[:100], sigma2s[:100], nu2s[:100]
+    ####### Run the Gibbs sampler #######
+    print('Running Gibbs sampler')
+    results = model.run_gibbs(Y_train, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=50, verbose=True)
+    Ws = results['W']
+    Vs = results['V']
+    Tau2s = results['Tau2']
+    lam2s = results['lam2']
+    sigma2s = results['sigma2']
+    nu2s = results['nu2']
 
-# Get the Bayes estimate
-Mu_hat = np.einsum('znk,zmtk->znmt', Ws, Vs)
-Mu_hat_mean = Mu_hat.mean(axis=0)
-Mu_hat_upper = np.percentile(Mu_hat, 97.5, axis=0)
-Mu_hat_lower = np.percentile(Mu_hat, 2.5, axis=0)
+    # Look at just the first 100 instead of 1000
+    # Ws, Vs, Tau2s, lam2s, sigma2s, nu2s = Ws[:100], Vs[:100], Tau2s[:100], lam2s[:100], sigma2s[:100], nu2s[:100]
 
-# Get the posterior predictives and confidence bands
-# Y_samples = np.random.normal(Mu_hat, nu2s[:,None,:,None], size=[100] + [d for d in Mu_hat.shape])
-# Y_samples = Y_samples.reshape([-1,Y_samples.shape[2],Y_samples.shape[3],Y_samples.shape[4]])
-# Y_upper = np.percentile(Y_samples, 97.5, axis=0)
-# Y_lower = np.percentile(Y_samples, 2.5, axis=0)
+    # Get the Bayes estimate
+    Mu_hat = np.einsum('znk,zmtk->znmt', Ws, Vs)
+    Mu_hat_mean = Mu_hat.mean(axis=0)
+    Mu_hat_upper = np.percentile(Mu_hat, 97.5, axis=0)
+    Mu_hat_lower = np.percentile(Mu_hat, 2.5, axis=0)
 
-# If the whole thing is too big, do it iteratively
-Y_lower, Y_upper = np.zeros(Y.shape), np.zeros(Y.shape)
-for i in range(Y.shape[0]):
-    if i % 10 == 0:
-        print(i)
-    for k in range(Y.shape[2]):
-        Y_samples_ik = np.random.normal(Mu_hat[:,i,0,k], np.sqrt(nu2s[:,0]), size=(100,Mu_hat.shape[0]))
-        Y_upper[i,0,k] = np.percentile(Y_samples_ik, 97.5)
-        Y_lower[i,0,k] = np.percentile(Y_samples_ik, 2.5)
+    np.savetxt('flu-states/btf{}_mu_mean.csv'.format(nembeds), Mu_hat_mean[:,0], delimiter=',')
+    np.savetxt('flu-states/btf{}_mu_upper.csv'.format(nembeds), Mu_hat_upper[:,0], delimiter=',')
+    np.savetxt('flu-states/btf{}_mu_lower.csv'.format(nembeds), Mu_hat_lower[:,0], delimiter=',')
+    
+
+    # Get the posterior predictives and confidence bands
+    # Y_samples = np.random.normal(Mu_hat, nu2s[:,None,:,None], size=[100] + [d for d in Mu_hat.shape])
+    # Y_samples = Y_samples.reshape([-1,Y_samples.shape[2],Y_samples.shape[3],Y_samples.shape[4]])
+    # Y_upper = np.percentile(Y_samples, 97.5, axis=0)
+    # Y_lower = np.percentile(Y_samples, 2.5, axis=0)
+
+    # If the whole thing is too big, do it iteratively
+    Y_lower, Y_upper = np.zeros(Y.shape), np.zeros(Y.shape)
+    for i in range(Y.shape[0]):
+        if i % 10 == 0:
+            print(i)
+        for k in range(Y.shape[2]):
+            Y_samples_ik = np.random.normal(Mu_hat[:,i,0,k], np.sqrt(nu2s[:,0]), size=(100,Mu_hat.shape[0]))
+            Y_upper[i,0,k] = np.percentile(Y_samples_ik, 97.5)
+            Y_lower[i,0,k] = np.percentile(Y_samples_ik, 2.5)
+
+    np.savetxt('flu-states/btf{}_y_upper.csv'.format(nembeds), Y_upper[:,0], delimiter=',')
+    np.savetxt('flu-states/btf{}_y_lower.csv'.format(nembeds), Y_lower[:,0], delimiter=',')
 
 ###### Plot the true curves, the noisy observations, and the fits ######
 print('Plotting results')
@@ -132,19 +143,24 @@ def mae(mu):
     print('Out-sample  MAE: {:.2f}'.format(np.mean(np.abs(Y[is_held_out] - mu[is_held_out]))))
 
 ###### Compare to Fox and Dunson (2015) ######
-bnp_mu_hat = np.loadtxt('flu-states/mu_mean.csv', delimiter=',')[:,None]
-
-
 print('Fox and Dunson (2015)')
+bnp_mu_hat = np.loadtxt('flu-states/bnpcovreg_mu_mean.csv', delimiter=',')[:,None]
 rmse(bnp_mu_hat)
 print()
 mae(bnp_mu_hat)
 print()
 print()
 print('Bayesian Tensor Filtering')
-rmse(Mu_hat_mean)
-print()
-mae(Mu_hat_mean)
+for nembeds in [2,5,10]:
+    print('k={}'.format(nembeds))
+    Mu_hat_mean = np.loadtxt('flu-states/btf{}_mu_mean.csv'.format(nembeds), delimiter=',')[:,None]
+    Y_lower = np.loadtxt('flu-states/btf{}_y_lower.csv'.format(nembeds), delimiter=',')[:,None]
+    Y_upper = np.loadtxt('flu-states/btf{}_y_upper.csv'.format(nembeds), delimiter=',')[:,None]
+    print('In-sample  coverage: {:.2f}%'.format(100-((Y[is_in_sample] < Y_lower[is_in_sample]) | (Y[is_in_sample] > Y_upper[is_in_sample])).mean()*100))
+    print('Out-sample coverage: {:.2f}%'.format(100-((Y[is_held_out] < Y_lower[is_held_out]) | (Y[is_held_out] > Y_upper[is_held_out])).mean()*100))
+    rmse(Mu_hat_mean)
+    print()
+    mae(Mu_hat_mean)
 
 
 ####### Plot the 2D factor loadings ######
@@ -160,6 +176,95 @@ plt.savefig('plots/state-embeddings-2d.pdf', bbox_inches='tight')
 plt.close()
 
 
+big_plot = False
+# bnp_mu_hat = np.loadtxt('flu-states/bnpcovreg_mu_mean.csv', delimiter=',')
+# bnp_y_upper = np.loadtxt('flu-states/bnpcovreg_y_upper.csv', delimiter=',')
+# bnp_y_lower = np.loadtxt('flu-states/bnpcovreg_y_lower.csv', delimiter=',')
 
+# Mu_hats = [np.loadtxt('flu-states/' + s + '_mu_mean.csv', delimiter=',') for s in ['bnpcovreg', 'btf10']]
+# labels = ['BNP-CovReg', 'BTF d=10']
+# colors = ['blue', 'orange']
+# styles = ['-', '-']
+print('Plotting results')
 
+# X = np.arange(ndepth)
+X = np.array([datetime.datetime.strptime(x[0][0], '%Y-%m-%d') for x in df_states['dates']])
+myears = mdates.YearLocator()   # every year
+mmonths = mdates.MonthLocator()  # every month
+years_fmt = mdates.DateFormatter('%Y')
+
+# rescaler = np.sqrt(np.nanmax(Y)) / 1.75
+
+for s in ['bnpcovreg', 'btf5']:
+    mu = np.loadtxt('flu-states/' + s + '_mu_mean.csv', delimiter=',')
+    with sns.axes_style('white'):
+        plt.rc('font', weight='bold')
+        plt.rc('grid', lw=1)
+        plt.rc('lines', lw=2)
+        plt.rc('xtick', labelsize=18)    # fontsize of the tick labels
+        plt.rc('ytick', labelsize=18)    # fontsize of the tick labels
+        matplotlib.rcParams['pdf.fonttype'] = 42
+        matplotlib.rcParams['ps.fonttype'] = 42
+        plot_ncols = 10
+        plot_nrows = nrows // plot_ncols + int((nrows % plot_ncols) > 0)
+        if big_plot:
+            fig, axarr = plt.subplots(plot_nrows, plot_ncols, figsize=(5*plot_ncols,5*plot_nrows), sharex=True, sharey=True)
+        else:
+            fig = plt.figure()
+        formatter = mdates.DateFormatter("%Y-%m-%d")
+        for i in range(nrows):
+            if i % plot_ncols == 0:
+                print(i)
+            if big_plot:
+                ax = axarr[i // plot_ncols, i % plot_ncols]
+            else:
+                fig = plt.figure()
+                ax = plt.gca()
+            is_missing = np.isnan(Y[i,0])
+            is_held_out = (~is_missing) & np.isnan(Y_train[i,0])    
+            is_in_sample = (~is_missing) & (~is_held_out)
+            ax.scatter(X[~is_missing], Y[i,0,~is_missing], color='gray', alpha=0.5)
+            ax.plot(X, mu[i], color='black', lw=3)
+            # Uncomment this if you want to plot 95% uncertainty intervals
+            # ax.fill_between(X, bnp_y_lower[i], bnp_y_upper[i], color='orange', alpha=0.5)
+            for _, start, end in to_hold[to_hold[:,0] == i]:
+                ax.axvspan(X[start], X[end-1], color='gray', alpha=0.3)
+            if big_plot:
+                ax.set_title(df_states['USnames'][i][0][0], weight='bold', fontsize=22)
+            ax.xaxis.set_major_locator(myears)
+            ax.xaxis.set_major_formatter(years_fmt)
+            ax.xaxis.set_minor_locator(mmonths)
+            # format the coords message box
+            ax.format_xdata = formatter
+            ax.grid(True)
+            ax.tick_params(axis='both', which='both', labelsize=13, labelbottom=True)
+            for tick in ax.get_xticklabels():
+                tick.set_visible(True)
+
+            # round to nearest years.
+            datemin = np.datetime64(X[0], 'Y')
+            datemax = np.datetime64(X[-1], 'Y') + np.timedelta64(1, 'Y')
+            plt.xlim(datemin, datemax)
+
+            # rotates and right aligns the x labels, and moves the bottom of the
+            # axes up to make room for them
+            fig.autofmt_xdate()
+            plt.ylim([np.nanmin(Y)-0.01, np.nanmax(Y)+0.01])
+
+            ax.set_xlabel('Year', fontsize=18, weight='bold')
+            ax.set_ylabel('Log infection count', fontsize=18, weight='bold')
+
+            if not big_plot:
+                plotdir = 'plots/'
+                if not os.path.exists(plotdir):
+                    os.makedirs(plotdir)
+                plt.savefig(os.path.join(plotdir, '{}-{}.pdf'.format(s,df_states['USnames'][i][0][0].lower().replace(' ', '-'))), bbox_inches='tight')
+                plt.close()
+
+        if big_plot:
+            plotdir = 'plots/'
+            if not os.path.exists(plotdir):
+                os.makedirs(plotdir)
+            plt.savefig(os.path.join(plotdir, '{}-states.pdf'.format(s)), bbox_inches='tight')
+            plt.close()
 

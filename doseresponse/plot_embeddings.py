@@ -120,17 +120,27 @@ if __name__ == '__main__':
         cell_type_map[label].extend(w)
         color_map[label].extend(filtered_colors[t])
 
-    ncols = (np.arange(5)+1)[(len(cell_type_map) % (np.arange(5)+1)) == 0].max()
-    nrows = int(np.ceil(len(cell_type_map) / ncols))
-    fig, axarr = plt.subplots(nrows, ncols, figsize=(5*ncols, 5*nrows), sharex=True, sharey=True)
-    for idx, (t,w) in enumerate(cell_type_map.items()):
-        ax = axarr[idx // ncols, idx % ncols]
-        W_t = np.array(w)
-        ax.scatter(W_t[:,0], W_t[:,1], c='black')
-        ax.set_title(t)
-    # plt.legend(loc='lower left', ncol=2)
-    plt.savefig(os.path.join(args.plotdir, 'embeddings.pdf'), bbox_inches='tight')
-    plt.close()
+    with sns.axes_style('white'):
+        plt.rc('font', weight='bold')
+        plt.rc('grid', lw=3)
+        plt.rc('lines', lw=3)
+        plt.rc('xtick', labelsize=14)    # fontsize of the tick labels
+        plt.rc('ytick', labelsize=14)    # fontsize of the tick labels
+        matplotlib.rcParams['pdf.fonttype'] = 42
+        matplotlib.rcParams['ps.fonttype'] = 42
+        ncols = (np.arange(5)+1)[(len(cell_type_map) % (np.arange(5)+1)) == 0].max()
+        nrows = int(np.ceil(len(cell_type_map) / ncols))
+        fig, axarr = plt.subplots(nrows, ncols, figsize=(5*ncols, 5*nrows), sharex=True, sharey=True)
+        for idx, (t,w) in enumerate(cell_type_map.items()):
+            ax = axarr[idx // ncols, idx % ncols]
+            W_t = np.array(w)
+            ax.scatter(W_t[:,0], W_t[:,1], c='black')
+            ax.set_title(t, fontsize=22, weight='bold')
+            ax.set_xlabel('PC1', fontsize=18, weight='bold')
+            ax.set_ylabel('PC2', fontsize=18, weight='bold')
+        # plt.legend(loc='lower left', ncol=2)
+        plt.savefig(os.path.join(args.plotdir, 'embeddings.pdf'), bbox_inches='tight')
+        plt.close()
 
 
     # if args.features:

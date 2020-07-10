@@ -845,7 +845,6 @@ def _v_constraints(self):
 
 def _v_loglikelihood(V_j, ll_args):
     idx, data, self, mu_ep, sigma_ep = ll_args
-
     # The GASS sampler may call this with a single vector V_j or a batch
     # of multiple candidate vectors.
     if len(V_j.shape) > 1:
@@ -978,8 +977,8 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             resample_args = [(i, data) for i in range(self.nrows)]
             self.executor.map(_resample_W_i, resample_args)
         else:
-            resample_args = [(self, i, data) for i in range(self.nrows)]
-            self.executor.map(lambda p: _resample_W_i(*p), resample_args)
+            resample_args = [(i, data) for i in range(self.nrows)]
+            self.executor.map(_resample_W_i, resample_args)
     
     def _resample_V(self, data):
         # Get the constraints given the current values of W
@@ -988,7 +987,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
             self.executor.map(_resample_V_j, resample_args)
         else:
             resample_args = [(j, data) for j in range(self.ncols)]
-            self.executor.map(lambda p: _resample_V_j(*p), resample_args)
+            self.executor.map(_resample_V_j, resample_args)
 
     def logprob(self, data, **kwargs):
         # Calculate the mean effects for each V_j in the batch
@@ -1004,7 +1003,7 @@ class ConstrainedNonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
     def _resample_lam2(self):
         super()._resample_lam2()
 
-        if multiprocessing:
+        if self.multiprocessing:
             self.lam2_shared[:] = self.lam2
 
 

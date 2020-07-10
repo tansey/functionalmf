@@ -106,7 +106,7 @@ if ~restart
         init_stats_filename = strcat(settings.saveDir,'/',settings.filename,'initialStats_trial',num2str(trial));    % create filename for current iteration
     else
         settings_filename = strcat(settings.saveDir,'/info4trial',num2str(trial));    % create filename for current iteration
-        init_stats_filename = strcat(settings.saveDir,'/initialStats_trial',num2str(trial));    % create filename for current iteration
+        init_stats_filename = strcat(settings.saveDir,'/initialStats_trial',num2str(trial),'.mat');    % create filename for current iteration
     end
     if nargin>4
         save(settings_filename,'y','settings','prior_params','true_params') % save current statistics
@@ -122,7 +122,7 @@ if ~restart
 else
     
     % Load last saved sample from the Gibbs chain to restart the sampler:
-    load([settings.saveDir,'/BNP_covreg_stats','iter',num2str(settings.lastIter),'trial',num2str(settings.trial)]);
+    load([settings.saveDir,'/BNP_covreg_stats','iter',num2str(settings.lastIter),'trial',num2str(settings.trial),'.mat']);
     
     theta = Stats(end).theta;
     eta = Stats(end).eta;
@@ -212,7 +212,7 @@ for nn=nstart:Niter
         if isfield(settings,'filename')
             filename = strcat(settings.saveDir,'/',settings.filename,'iter',num2str(nn),'trial',num2str(settings.trial));    % create filename for current iteration
         else
-            filename = strcat(settings.saveDir,'/BNP_covreg_stats','iter',num2str(nn),'trial',num2str(settings.trial));    % create filename for current iteration
+            filename = strcat(settings.saveDir,'/BNP_covreg_stats','iter',num2str(nn),'trial',num2str(settings.trial),'.mat');    % create filename for current iteration
         end
         
         % Save stats to specified directory:

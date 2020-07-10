@@ -150,16 +150,29 @@ def benchmarks():
     verbose = True
 
 
-    mu_prior = np.array([0.95, 0.8, 0.75, 0.5, 0.29, 0.2, 0.17, 0.15, 0.15]) # monotonic curve prior
+    mu_prior = np.array([0.95, 0.8, 0.75, 0.5, 0.29, 0.2, 0.17, 0.15, 0.01, 0.0001]) # monotonic curve prior
     T = len(mu_prior)
+    b = 3
+    min_mu, max_mu = 0.0, 1
+    sigma_prior = 0.1*np.array([np.exp(-0.5*(i - np.arange(T))**2 / b) for i in range(T)]) # Squared exponential kernel
+    
+    # Get an empirical estimate of the logit-transformed covariance
+    print('Building empirical covariance matrix for logit transformed model')
+    mu_samples = np.zeros((1000, len(mu_prior)))
+    for i in range(mu_samples.shape[0]):
+        if i % 1 == 0:
+            print('\t', i)
+        mu_samples[i] = np.random.multivariate_normal(mu_prior, sigma_prior)
+        while mu_samples[i].min() < min_mu or mu_samples[i].max() > max_mu or (mu_samples[i][1:] - mu_samples[i][:-1]).max() > 0:
+            mu_samples[i] = np.random.multivariate_normal(mu_prior, sigma_prior)
+    mu_samples_logit = np.log(mu_samples / (1-mu_samples))
+    sigma_prior_logit = np.einsum('ni,nj->nij', mu_samples_logit, mu_samples_logit).mean(axis=0)
+    mu_prior_logit = np.log(mu_prior / (1-mu_prior))
 
     mse = np.zeros((ntrials,nsizes,nmethods))
     coverage = np.zeros((ntrials, nsizes, nmethods,T), dtype=bool)
     for trial in range(ntrials):
         print('Trial {}'.format(trial))
-        b = 3
-        min_mu, max_mu = 0.1, 1
-        sigma_prior = 0.1*np.array([np.exp(-0.5*(i - np.arange(T))**2 / b) for i in range(T)]) # Squared exponential kernel
         
         # Sample the true mean via rejection sampling
         mu_truth = np.random.multivariate_normal(mu_prior, sigma_prior)
@@ -167,6 +180,8 @@ def benchmarks():
             mu_truth = np.random.multivariate_normal(mu_prior, sigma_prior)
         
         print(mu_truth)
+
+        
         
         # Plot some data points using the true scale
         data = np.array([np.random.gamma(100, scale=mu_truth) for _ in range(nobs)]).T
@@ -218,14 +233,14 @@ def benchmarks():
             x[1], cur_ll[1] = ess(x[1], sigma_prior, rejection_loglike, cur_log_like=cur_ll[1], mu=mu_prior)
 
             # Logistic ESS + rejection sampling
-            x[2], cur_ll[2] = ess(x[2], sigma_prior, rejection_loglike, cur_log_like=cur_ll[2], mu=mu_prior, ll_args='logistic')
+            x[2], cur_ll[2] = ess(x[2], sigma_prior_logit, rejection_loglike, cur_log_like=cur_ll[2], mu=mu_prior_logit, ll_args='logistic')
 
             # Naive ESS + posterior projection
             x[3], cur_ll[3] = ess(x[3], sigma_prior, log_likelihood, cur_log_like=cur_ll[3], mu=mu_prior)
 
             # Logistic ESS + posterior projection
-            x[4], cur_ll[4] = ess(x[4], sigma_prior, lambda x_prop, ll_args: log_likelihood(ilogit(x_prop), ll_args),
-                                    cur_log_like=cur_ll[4], mu=mu_prior)
+            x[4], cur_ll[4] = ess(x[4], sigma_prior_logit, lambda x_prop, ll_args: log_likelihood(ilogit(x_prop), ll_args),
+                                    cur_log_like=cur_ll[4], mu=mu_prior_logit)
 
             # Save posterior samples
             if step >= nburn:
@@ -290,6 +305,7 @@ def benchmarks():
                     plt.fill_between(xobs[:,0], mu_lower[midx], mu_upper[midx], color='orange', alpha=0.5)
                     plt.axhline(max_mu, color='red', ls='--', label='Upper bound')
                     plt.axhline(min_mu, color='red', ls='--', label='Lower bound')
+                    plt.ylim([-0.1,1.1])
                     plt.ylabel('Gamma scale', fontsize=14)
                     plt.savefig('plots/gass-example-{}.pdf'.format(method.lower()), bbox_inches='tight')
                     plt.close()
