@@ -169,7 +169,7 @@ if __name__ == '__main__':
                     import warnings
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore", category=RuntimeWarning)
-                        Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=nthreads)
+                        Mu_pgds, (W_pgds, V_pgds, U_pgds) = fit_pgds(Y_missing.sum(axis=-1), nembeds, nburn=nburn, nthin=nthin, nsamples=nsamples, tau=tau, nthreads=1)
                     Mu_pgds_mean = Mu_pgds.mean(axis=0) / Y_missing.shape[-1]
                     models.append({'name': 'PGDS tau={}'.format(tau), 'fit': Mu_pgds_mean, 'samples': Mu_pgds, 'file': 'pgds_{}.npy'.format(tau)})
             except:
@@ -181,7 +181,7 @@ if __name__ == '__main__':
             tf_order = 0
             nbinom_model = NegativeBinomialBayesianTensorFiltering(nrows, ncols, ndepth,
                                                                       nembeds=nembeds, tf_order=tf_order,
-                                                                      sigma2_init=1, nthreads=1,
+                                                                      sigma2_init=1, nthreads=nthreads,
                                                                       lam2_init=0.1, nu2_init=1)
             results = nbinom_model.run_gibbs(Y_missing, nburn=nburn, nthin=nthin, nsamples=nsamples, print_freq=1000, verbose=True)
             Ws = results['W']
