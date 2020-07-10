@@ -120,19 +120,60 @@ def clean_up(sharedprefix):
     try_delete(sharedprefix + 'Delta_row')
     try_delete(sharedprefix + 'Delta_col')
 
+def agg_results(models, metrics):
+    # Load the data
+    import os
+    nembeds_options = [2,3,5,10]
+    seeds = [1,2,3,4,5]
+    nmetrics = len(metrics)
+    aggregate_performance = {nembeds: [] for nembeds in nembeds_options}
+    for seed in seeds:
+        for nembeds in nembeds_options:
+            outdir = os.path.join('data/poisson_tensor_filtering/', 'seed{}-nembeds{}'.format(seed, nembeds))
+            metric_results = np.load(os.path.join(outdir, 'results.npy'))
+            aggregate_performance[nembeds].append(metric_results)
+            
+    # Print the aggregated results
+    for nembeds in nembeds_options:
+        print('d={}'.format(nembeds))
+        nembeds_results = np.array(aggregate_performance[nembeds]).mean(axis=0)
+        print(('{:<18}'*(nmetrics+1)).format(*(['Model'] + [m['name'] for m in metrics])))
+        for i, m in enumerate(models):
+            model_results = ''.join(['{:<18.2f}'.format(r) for r in nembeds_results[:,i]])
+            print('{:<18}'.format(m) + model_results)
+
+
 if __name__ == '__main__':
     import sys
     nburn = 5000
     nthin = 5
     nsamples = 1000
     nchains = 1
-    nembeds_options = [2,3,5,10]
     # nthreads = 1 if len(sys.argv) == 1 else int(sys.argv[1])
-    nthreads = 3
+    nthreads = 4
+
+    metrics = [#{'name': 'MAE (all data)',  'fun': lambda Y, Mu, pred, samples: mae(Y, pred[...,None])},
+               #{'name': 'RMSE (all data)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y, pred[...,None]))},
+               #{'name': 'NLL (all data)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y, pred[...,None]))},
+               {'name': 'MAE (held out)',  'fun': lambda Y, Mu, pred, samples: mae(Y[:3,:3], pred[:3,:3,...,None])},
+               {'name': 'RMSE (held out)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y[:3,:3], pred[:3,:3,...,None]))},
+               {'name': 'NLL (held out)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y[:3,:3], pred[:3,:3,...,None]))},
+               {'name': 'MAE (true rate)', 'fun': lambda Y, Mu, pred, samples: mae(Mu, pred)},
+               {'name': 'RMSE (true rate)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Mu, pred))},
+               {'name': '50% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 50)},
+               {'name': '75% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 75)},
+               {'name': '90% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 90)},
+               {'name': '95% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 95)}]
+    nmetrics = len(metrics)
+    
+    if sys.argv[1] == 'agg':
+        models = ['NMF'] + ['PGDS tau={}'.format(t) for t in [0.25,0.5,1]] + ['NBinom-BTF'] + ['Poisson-BTF']
+        agg_results(models, metrics)
+        sys.exit(1)
+
     nembeds = int(sys.argv[1])
     seed = int(sys.argv[2])
     
-    # aggregate_performance = {nembeds: [] for nembeds in nembeds_options}
     # for seed in [1,2,3,4,5]:
     np.random.seed(seed)
 
@@ -235,23 +276,8 @@ if __name__ == '__main__':
     Mu_hat_lower = np.percentile(Mu_hat, 5, axis=0)
     models.append({'name': 'Poisson-BTF', 'fit': Mu_hat_mean, 'samples': Mu_hat, 'file': 'btf_poisson.npy'})
     ###########################################################################
-    
 
-    metrics = [#{'name': 'MAE (all data)',  'fun': lambda Y, Mu, pred, samples: mae(Y, pred[...,None])},
-               #{'name': 'RMSE (all data)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y, pred[...,None]))},
-               #{'name': 'NLL (all data)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y, pred[...,None]))},
-               {'name': 'MAE (held out)',  'fun': lambda Y, Mu, pred, samples: mae(Y[:3,:3], pred[:3,:3,...,None])},
-               {'name': 'RMSE (held out)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Y[:3,:3], pred[:3,:3,...,None]))},
-               {'name': 'NLL (held out)', 'fun': lambda Y, Mu, pred, samples: -np.nansum(poisson.logpmf(Y[:3,:3], pred[:3,:3,...,None]))},
-               {'name': 'MAE (true rate)', 'fun': lambda Y, Mu, pred, samples: mae(Mu, pred)},
-               {'name': 'RMSE (true rate)', 'fun': lambda Y, Mu, pred, samples: np.sqrt(mse(Mu, pred))},
-               {'name': '50% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 50)},
-               {'name': '75% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 75)},
-               {'name': '90% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 90)},
-               {'name': '95% Coverage', 'fun': lambda Y, Mu, pred, samples: coverage_at(Mu, samples, 95)}]
-    nmetrics = len(metrics)
     nmodels = len(models)
-
     metric_results = np.zeros((nmetrics, nmodels))
     for metidx, metric in enumerate(metrics):
         metric_results[metidx] = [metric['fun'](Y, Mu, m['fit'], m['samples']) for m in models]
@@ -260,6 +286,7 @@ if __name__ == '__main__':
     outdir = os.path.join('data/poisson_tensor_filtering/', 'seed{}-nembeds{}'.format(seed, nembeds))
     if not os.path.exists(outdir):
         os.makedirs(outdir)
+    np.save(os.path.join(outdir, 'results'), metric_results)
     np.save(os.path.join(outdir, 'y'), Y)
     np.save(os.path.join(outdir, 'mu'), Mu)
     [np.save(os.path.join(outdir, m['file'].replace('.npy', '_fit.npy')), m['fit']) for m in models]
