@@ -324,7 +324,8 @@ def benchmarks():
         print(' & '.join(['${:.2f} \\pm {:.2f}$'.format(m,s) for m,s in zip(coverage_mean[:,i], coverage_stderr[:,i])]))
 
 if __name__ == '__main__':
-    benchmarks()
+    # benchmarks()
+    import matplotlib.pyplot as plt
     np.random.seed(42)
     nobs = 5
     nburn, nsamples = 10000, 10000
