@@ -15,13 +15,16 @@ def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor
     '''
     assert np.any([Q_shape is not None, not chol_factor, not sparse])
     if sparse:
-        # Cholesky factor LL' = Q of the prior precision Q
+        # Cholesky factor LL' = PQP' of the prior precision Q
+        # where P is the permuation that reorders Q, the ordering of resulting L follows P
         factor = cholesky(Q) if not chol_factor else Q
 
         # Solve L'h = z ==> L'^-1 z = h, this is a sample from the prior.
         z = np.random.normal(size=Q.shape[0] if not chol_factor else Q_shape[0])
-        result = factor.solve_Lt(z, False)
+        # reorder h by the permatation used in cholesky(Q)
+        result = factor.solve_Lt(z, False)[np.argsort(factor.P())]
         if mu_part is not None:
+            # no need to reorder here since solve_A use the original Q
             result += factor.solve_A(mu_part)
         return result
 
@@ -30,6 +33,7 @@ def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor
     # using the precision matrix by doing LL' = Cholesky(Precision)
     # then the covariance part of the draw is just inv(L')z where z is
     # a standard normal.
+    # ordering should be good here since linalg.cholesky solve LL'=Q 
     Lt = np.linalg.cholesky(Q).T if not chol_factor else Q.T
     z = np.random.normal(size=Q.shape[0])
     result = solve_triangular(Lt, z, lower=False)
