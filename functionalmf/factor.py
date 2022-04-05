@@ -29,14 +29,22 @@ class BayesianTensorFiltering(_BayesianModel):
                        Tau2_init=None, Tau2_true=None,
                        W_init=None, V_init=None,
                        W_true=None, V_true=None,
-                       stability=1e-6, linalg_opts=dict(), **kwargs):
+                       stability=1e-6, 
+                       force_psd=False, 
+                       force_psd_eps=1e-6,
+                       force_psd_attempts=4,
+                       **kwargs):
         super().__init__(**kwargs)
         self.nrows = nrows
         self.ncols = ncols
         self.ndepth = ndepth
         self.nembeds = nembeds
         self.stability = stability
-        self.linalg_opts = linalg_opts
+        self.linalg_opts = dict(
+            force_psd=force_psd,
+            force_psd_eps=force_psd_eps,
+            force_psd_attempts=force_psd_attempts
+        )
 
         # Setup the trend filtering prior
         self.Delta = bayes_grid_penalty(ndepth, tf_order)

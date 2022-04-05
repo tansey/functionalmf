@@ -8,7 +8,7 @@ from numpy.linalg import LinAlgError
 
 
 def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor=False, Q_shape=None,
-                              force_psd=False, min_force_psd=1e-3, psd_attempts=4):
+                              force_psd=False, force_psd_eps=1e-6, force_psd_attempts=4):
     '''Fast sampling from a multivariate normal with precision parameterization.
     Supports sparse arrays. Params:
         - mu: If provided, assumes the model is N(mu, Q^-1)
@@ -18,9 +18,9 @@ def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor
                         decomposition of the precision matrix
         - force_psd (bool): If true, attempts to force the precision matrix to
                             be positive definite adding a diagonal term.
-        - min_force_psd (float): If force_psd is true, min_force_psd is the frist value added to the diagonal
+        - force_psd_eps (float): If force_psd is true, force_psd_eps is the frist value added to the diagonal
                             to force the precision matrix to be positive definite.
-        - psd_attempts (int): If force_psd is true, this is the number of attempts to force
+        - force_psd_attempts (int): If force_psd is true, this is the number of attempts to force
                               the precision matrix to be positive definite. Each attempt a diagonal term that
                               is 10 times larger than the previous one is added.
 
@@ -28,7 +28,7 @@ def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor
     assert np.any([Q_shape is not None, not chol_factor, not sparse])
 
     attempt = 0
-    eps = min_force_psd
+    eps = force_psd_eps
 
     while True:
         try:
@@ -60,7 +60,7 @@ def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor
                 elif mu is not None:
                     result += mu
         except (CholmodNotPositiveDefiniteError, LinAlgError):
-            if force_psd and attempt < psd_attempts:
+            if force_psd and attempt < force_psd_attempts:
                 Q = Q.copy()
                 Q[np.diag_indices_from(Q)] += eps
                 warn(f"Cholesky factorization failed, adding shrinkage {eps}.")
@@ -68,14 +68,14 @@ def sample_mvn_from_precision(Q, mu=None, mu_part=None, sparse=True, chol_factor
                 eps *= 10
             else:
                 warn(f'Cholesky factorization failed, try setting force_psd=True or increasing attempts')
-                if attempt > psd_attempts:
+                if attempt > force_psd_attempts:
                     raise Exception("Max attempts reached. Could not force matrix to be positive definite.")
         else:
             return result
 
 
 def sample_mvn_from_covariance(Q, mu=None, mu_part=None, sparse=True, chol_factor=False,
-                               force_psd=False, min_force_psd=1e-3, psd_attempts=4):
+                               force_psd=False, force_psd_eps=1e-6, force_psd_attempts=4):
     '''Fast sampling from a multivariate normal with covariance parameterization.
     Supports sparse arrays. Params:
         - mu: If provided, assumes the model is N(mu, Q)
@@ -83,17 +83,17 @@ def sample_mvn_from_covariance(Q, mu=None, mu_part=None, sparse=True, chol_facto
         - sparse: If true, assumes we are working with a sparse Q
         - chol_factor: If true, assumes Q is a (lower triangular) Cholesky
                         decomposition of the covariance matrix
-        - force_psd (bool): If true, attempts to force the precision matrix to
+        - force_psd (bool): If true, attempts to force the covariance- matrix to
                             be positive definite adding a diagonal term
-        - min_force_psd (float): If force_psd is true, min_force_psd is the frist value added to the diagonal
-                            to force the precision matrix to be positive definite.l
-        - psd_attempts (int): If force_psd is true, this is the number of attempts to force
-                              the precision matrix to be positive definite. Each attempt a diagonal term that
+        - force_psd_eps (float): If force_psd is true, force_psd_eps is the frist value added to the diagonal
+                            to force the covariance matrix to be positive definite.l
+        - force_psd_attempts (int): If force_psd is true, this is the number of attempts to force
+                              the covariance matrix to be positive definite. Each attempt a diagonal term that
                               is 10 times larger than the previous one is added.
     '''
 
     attempt = 0
-    eps = min_force_psd
+    eps = force_psd_eps
 
     while True:
         try:
@@ -128,7 +128,7 @@ def sample_mvn_from_covariance(Q, mu=None, mu_part=None, sparse=True, chol_facto
                 elif mu is not None:
                     result += mu
         except (CholmodNotPositiveDefiniteError, LinAlgError):
-            if force_psd and attempt < psd_attempts:
+            if force_psd and attempt < force_psd_attempts:
                 Q = Q.copy()
                 Q[np.diag_indices_from(Q)] += eps
                 warn(f"Cholesky factorization failed, adding shrinkage {eps}.")
@@ -136,7 +136,7 @@ def sample_mvn_from_covariance(Q, mu=None, mu_part=None, sparse=True, chol_facto
                 eps *= 10
             else:
                 warn(f'Cholesky factorization failed, try setting force_psd=True or increasing attempts')
-                if attempt > psd_attempts:
+                if attempt > force_psd_attempts:
                     raise Exception("Max attempts reached. Could not force matrix to be positive definite.")
         else:
             return result
@@ -248,7 +248,7 @@ if __name__ == '__main__':
 
     # Non invertible case Covariance
     Q = np.array([[1,1.0],[1.0,1]])
-    X = np.array([sample_mvn(Q, sparse=False, chol_factor=False, precision=False, force_psd=True) for _ in range(1000)])
+    X = np.array([sample_mvn(Q, sparse=False, chol_factor=False, precision=False, force_psd=True, force_psd_eps=0.1) for _ in range(1000)])
     axarr[2,2].scatter(X[:,0], X[:,1])
     axarr[2,2].set_title('Non invertible, dense covariance')
     axarr[2,2].set_xlim(xlim)
@@ -256,7 +256,7 @@ if __name__ == '__main__':
 
     # Non invertible case Precision
     sp_Q = csc_matrix(Q)
-    X = np.array([sample_mvn(sp_Q, sparse=True, chol_factor=False, precision=True, force_psd=True) for _ in range(1000)])
+    X = np.array([sample_mvn(sp_Q, sparse=True, chol_factor=False, precision=True, force_psd=True, force_psd_eps=0.1) for _ in range(1000)])
     axarr[2,3].scatter(X[:,0], X[:,1])
     axarr[2,3].set_title('Non invertible, sparse precision')
     axarr[2,3].set_xlim(xlim)
