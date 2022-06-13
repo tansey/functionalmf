@@ -19,6 +19,7 @@ from concurrent import futures
 from multiprocessing import Pool
 import SharedArray as sa
 
+
 class BayesianTensorFiltering(_BayesianModel):
     def __init__(self, nrows, ncols, ndepth,
                        nembeds=5, tf_order=2,
@@ -28,13 +29,22 @@ class BayesianTensorFiltering(_BayesianModel):
                        Tau2_init=None, Tau2_true=None,
                        W_init=None, V_init=None,
                        W_true=None, V_true=None,
-                       stability=1e-6, **kwargs):
+                       stability=1e-6, 
+                       force_psd=False, 
+                       force_psd_eps=1e-6,
+                       force_psd_attempts=4,
+                       **kwargs):
         super().__init__(**kwargs)
         self.nrows = nrows
         self.ncols = ncols
         self.ndepth = ndepth
         self.nembeds = nembeds
         self.stability = stability
+        self.linalg_opts = dict(
+            force_psd=force_psd,
+            force_psd_eps=force_psd_eps,
+            force_psd_attempts=force_psd_attempts
+        )
 
         # Setup the trend filtering prior
         self.Delta = bayes_grid_penalty(ndepth, tf_order)
@@ -228,7 +238,7 @@ class BayesianTensorFiltering(_BayesianModel):
         for j in range(self.ncols):
             lam_Tau = spdiags(1/ (self.lam2 * self.Tau2[j]), 0, self.Tau2.shape[1], self.Tau2.shape[1], format='csc')
             Q = kron(I_embed, self.Delta.T.tocsc().dot(lam_Tau).dot(self.Delta)).tocsc()
-            self.V[j] = sample_mvn_from_precision(Q).reshape((self.nembeds, self.ndepth)).T
+            self.V[j] = sample_mvn_from_precision(Q, **self.linalg_opts).reshape((self.nembeds, self.ndepth)).T
         self.V = self.V.clip(-10,10)
 
     def _init_Tau2(self):
@@ -396,7 +406,7 @@ class GaussianBayesianTensorFiltering(BayesianTensorFiltering):
 
             # Ridge regression 
             Q = Q_likelihood + Q_prior
-            self.V[j] = sample_mvn_from_precision(Q, mu_part=mu, sparse=True).reshape((self.nembeds, self.ndepth)).T
+            self.V[j] = sample_mvn_from_precision(Q, mu_part=mu, sparse=True, **self.linalg_opts).reshape((self.nembeds, self.ndepth)).T
 
     def _resample_nu2(self, data):
         Y = data
@@ -563,7 +573,7 @@ class NonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
         cur, Q = self._pack_W(self.W)
 
         # Draw from the prior
-        prior_sample = sample_mvn_from_precision(Q, sparse=True)
+        prior_sample = sample_mvn_from_precision(Q, sparse=True, **self.linalg_opts)
             
         # Draw from the posterior
         sample, _ = elliptical_slice_(cur, prior_sample,
@@ -573,7 +583,7 @@ class NonconjugateBayesianTensorFiltering(BayesianTensorFiltering):
 
     def _resample_V(self, data):
         cur, Q = self._pack_V(self.V)
-        prior_sample = sample_mvn_from_precision(Q, sparse=True)
+        prior_sample = sample_mvn_from_precision(Q, sparse=True, **self.linalg_opts)
         sample, _ = elliptical_slice_(cur, prior_sample,
                                        self._ess_V_loglikelihood,
                                        ll_args=data)
