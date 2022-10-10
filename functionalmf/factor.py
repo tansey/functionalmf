@@ -30,7 +30,7 @@ class BayesianTensorFiltering(_BayesianModel):
                        W_init=None, V_init=None,
                        W_true=None, V_true=None,
                        stability=1e-6, 
-                       force_psd=False, 
+                       force_psd=True, 
                        force_psd_eps=1e-6,
                        force_psd_attempts=4,
                        **kwargs):
