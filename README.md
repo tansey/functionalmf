@@ -1,5 +1,5 @@
 # functionalmf: Bayesian factorization of functional matrices
-This package implements a Bayesian tensor filtering (BTF), a method for factorizing matrices where each entry is an entire curve or function, rather than a scalar. Install with:
+This package implements Bayesian tensor filtering (BTF), a method for factorizing matrices where each entry is an entire curve or function, rather than a scalar. Install with:
 ```
 pip install functionalmf
 ```
