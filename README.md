@@ -139,15 +139,15 @@ If you use this code, please cite the following paper ([available here](https://
 ```
 Bayesian Tensor Filtering: Smooth, Locally-Adaptive Factorization of Functional Matrices
 W. Tansey, C. Tosh, D.M. Blei
-arXiv preprint arXiv:1906.04072
+Annals of Applied Statistics, 2021.
 ```
 Bibtex entry:
 ```
-@article{tansey:etal:2019:btf,
+@article{tansey:etal:2021:btf,
   title={Bayesian Tensor Filtering: Smooth, Locally-Adaptive Factorization of Functional Matrices},
   author={Tansey, Wesley and Tosh, Christopher and Blei, David M.},
-  journal={arXiv preprint arXiv:1906.04072},
-  year={2019}
+  journal={Annals of Applied Statistics},
+  year={2021}
 }
 ```
 
